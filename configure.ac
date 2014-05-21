@@ -68,6 +68,17 @@ AM_COND_IF([USE_MPIIO_AIORI],[
         AC_DEFINE([USE_MPIIO_AIORI], [], [Build MPIIO backend AIORI])
 ])
 
+# IOD support
+AC_ARG_WITH([iod],
+        [AS_HELP_STRING([--with-iod],
+           [support IO with IOD backend @<:@default=no@:>@])],
+        [],
+        [with_iod=no])
+AM_CONDITIONAL([USE_IOD_AIORI], [test x$with_iod = xyes])
+AM_COND_IF([USE_IOD_AIORI],[
+        AC_DEFINE([USE_IOD_AIORI], [], [Build IOD backend AIORI])
+])
+
 # HDF5 support
 AC_ARG_WITH([hdf5],
         [AS_HELP_STRING([--with-hdf5],

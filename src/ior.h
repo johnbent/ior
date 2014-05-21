@@ -133,6 +133,9 @@ typedef struct
 
     int id;                          /* test's unique ID */
     int intraTestBarriers;           /* barriers between open/op and op/close */
+
+    /* IOD variables */
+    /* no IOD variables yet */
 } IOR_param_t;
 
 /* each pointer is to an array, each of length equal to the number of

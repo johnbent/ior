@@ -87,6 +87,9 @@ class Test:
 	    'setAlignment':		1,
 	    'noFill':			0,	# in hdf5-1.6 or later version
 	    'individualDataSets':	0	# not working yet
+	# IOD
+		'persistDaos':      0,
+		'purgeIONs':        0,
 	}
 
     ###################

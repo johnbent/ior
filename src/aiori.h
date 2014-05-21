@@ -64,6 +64,7 @@ typedef struct ior_aiori {
 
 ior_aiori_t posix_aiori;
 ior_aiori_t mpiio_aiori;
+ior_aiori_t iod_aiori;
 ior_aiori_t hdf5_aiori;
 ior_aiori_t ncmpi_aiori;
 

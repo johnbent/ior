@@ -55,6 +55,9 @@ ior_aiori_t *available_aiori[] = {
 #ifdef USE_MPIIO_AIORI
         &mpiio_aiori,
 #endif
+#ifdef USE_IOD_AIORI
+        &iod_aiori,
+#endif
 #ifdef USE_HDF5_AIORI
         &hdf5_aiori,
 #endif
@@ -680,7 +683,7 @@ static void DisplayUsage(char **argv)
 {
         char *opts[] = {
                 "OPTIONS:",
-                " -a S  api --  API for I/O [POSIX|MPIIO|HDF5|NCMPI]",
+                " -a S  api --  API for I/O [POSIX|MPIIO|HDF5|NCMPI|IOD]",
                 " -A N  refNum -- user supplied reference number to include in the summary",
                 " -b N  blockSize -- contiguous bytes to write per task  (e.g.: 8, 4k, 2m, 1g)",
                 " -B    useO_DIRECT -- uses O_DIRECT for POSIX, bypassing I/O buffers",
