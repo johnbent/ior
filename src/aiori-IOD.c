@@ -45,6 +45,7 @@
 
 #include <iod_api.h>
 #include <iod_types.h>
+#include <plfs.h>
 
 #ifndef   open64        /* necessary for TRU64 -- */
 #define open64  open        /* unlikely, but may pose */
@@ -68,6 +69,8 @@ static void IOD_Delete(char *, IOR_param_t *);
 static void IOD_SetVersion(IOR_param_t *);
 static void IOD_Fsync(void *, IOR_param_t *);
 static IOR_offset_t IOD_GetFileSize(IOR_param_t *, MPI_Comm, char *);
+static int IOD_Init(char *, IOR_param_t *);
+static int IOD_Fini(char *, IOR_param_t *);
 
 /************************** D E C L A R A T I O N S ***************************/
 
@@ -80,7 +83,9 @@ ior_aiori_t iod_aiori = {
     IOD_Delete,
     IOD_SetVersion,
     IOD_Fsync,
-    IOD_GetFileSize
+    IOD_GetFileSize,
+    IOD_Init,
+    IOD_Fini
 };
 
 typedef struct iod_parameters_s {
@@ -106,11 +111,28 @@ static iod_state_t *istate = NULL;
 
 /***************************** F U N C T I O N S ******************************/
 
+enum {
+    DEBUG_ZERO, /* only rank 0 prints msg */
+    DEBUG_ALL,  /* all ranks print msg */
+    DEBUG_NONE, /* total silence */
+};
+
+
+int
+debug_on(int rank) {
+    int verbosity_level = DEBUG_NONE;
+    switch(verbosity_level) {
+            case DEBUG_ZERO: return (rank == 0);
+            case DEBUG_NONE: return 0;
+            case DEBUG_ALL: return 1;
+    }
+}
+
 #define IDEBUG(rank, format, ...)                     \
 do {                                    \
     int _rank = (rank);                         \
                                     \
-    if (_rank == 0) {                          \
+    if (debug_on(_rank)) {                          \
         fprintf(stdout, "%.2f IOD DEBUG (%s:%d): %d: : "       \
             format"\n", MPI_Wtime(), \
             __FILE__, __LINE__, rank,       \
@@ -123,6 +145,13 @@ do {                                    \
 	if (Y != 0 ) { \
 		IOD_PRINT_ERR(X,Y);\
 		return Y; \
+	} \
+}
+
+#define IOD_DIE_ON_ERROR(X,Y) { \
+	if (Y != 0 ) { \
+		IOD_PRINT_ERR(X,Y);\
+		assert(0); \
 	} \
 }
 
@@ -144,9 +173,71 @@ do {                                    \
     }                                   \
 } while (0);
 
-static void IOD_Barrier(int rank, MPI_Comm mcom) {
-    IDEBUG(rank, "MPI_Barrier");
-    MPI_Barrier(mcom);
+static void IOD_Barrier(iod_state_t *s) {
+    IDEBUG(s->myrank, "MPI_Barrier");
+    MPI_Barrier(s->mcom);
+}
+
+int
+setup_blob_io(size_t len, off_t off, char *buf, iod_state_t *s, int rw) { 
+
+	/* where is the IO directed in the object */
+	s->io_desc->nfrag = 1;
+	s->io_desc->frag[0].len = len;
+	s->io_desc->frag[0].offset = off;
+	
+	/* from whence does the IO come in memory */
+	s->mem_desc->nfrag = 1;
+	s->mem_desc->frag[0].addr = (void*)buf;
+	s->mem_desc->frag[0].len = len;
+
+	/* setup the checksum */
+	if (s->params.checksum) {
+		if (rw==WRITE) {
+			plfs_error_t pret;
+			pret  = plfs_get_checksum(buf,len,(Plfs_checksum*)s->cksum);
+			IOD_RETURN_ON_ERROR("plfs_get_checksum", pret);
+		} else {
+			memset(s->cksum,0,sizeof(*(s->cksum)));
+		}
+	}
+}
+
+// returns zero on success and number of bytes transferred in bytes
+int 
+iod_write(iod_state_t *I,char *buf,size_t len,off_t off,ssize_t *bytes) {
+	iod_ret_t ret;
+	iod_hint_list_t *hints = NULL;
+	iod_event_t *event = NULL;
+
+	setup_blob_io(len,off,buf,I,WRITE);
+	ret =iod_blob_write(I->oh,I->tid,hints,I->mem_desc,I->io_desc,I->cksum,event);
+	IOD_RETURN_ON_ERROR("iod_blob_write",ret); // successful write returns zero
+	*bytes = len;
+
+	return ret;
+}
+
+int 
+iod_read(iod_state_t *s, char *buf,size_t len,off_t off,ssize_t *bytes) {
+	iod_hint_list_t *hints = NULL;
+	iod_event_t *event = NULL;
+	iod_ret_t ret = 0;
+
+	setup_blob_io(len,off,buf,s,READ);
+	ret=iod_blob_read(s->oh,s->tid,hints,s->mem_desc,s->io_desc,s->cksum,event);
+	if ( ret == 0 ) { // current semantic is 0 for success
+		*bytes = len;
+	} else {
+		IOD_PRINT_ERR("iod_blob_read",ret);
+	}
+	
+	if (s->params.checksum) {
+		plfs_error_t pret = 0;
+		pret = plfs_checksum_match(buf,len,(Plfs_checksum)(*s->cksum));
+		IOD_RETURN_ON_ERROR("plfs_checksum_match", pret);
+	}
+	return ret; 
 }
 
 static int
@@ -172,7 +263,7 @@ set_checksum(iod_hint_list_t **hints, int checksum) {
 }
 
 int
-open_rd(iod_state_t *s, char *filename, MPI_Comm mcom) {
+open_rd(iod_state_t *s, char *filename) {
 	iod_ret_t ret = 0;
 
 	/* start the read trans */
@@ -180,7 +271,7 @@ open_rd(iod_state_t *s, char *filename, MPI_Comm mcom) {
 		ret=iod_trans_start(s->coh, &(s->tid),NULL,0,IOD_TRANS_R,NULL);
 		IOD_RETURN_ON_ERROR("iod_obj_open_read", ret);
 	}
-	IOD_Barrier(s->myrank, mcom);
+	IOD_Barrier(s);
 
 	ret = iod_obj_open_read(s->coh, s->oid, s->tid, NULL, &(s->oh), NULL);
 	IOD_RETURN_ON_ERROR("iod_obj_open_read", ret);
@@ -188,18 +279,18 @@ open_rd(iod_state_t *s, char *filename, MPI_Comm mcom) {
 }
 
 int
-open_wr(iod_state_t *I, char *filename, MPI_Comm mcom) {
+open_wr(iod_state_t *I, char *filename) {
 	iod_parameters_t *P = &(I->params);
 	int ret = 0;
 
 	/* start the write trans */
-	I->tid++;
+	I->tid++; // bump up the tid
 	if (I->myrank == 0) {
 		ret = iod_trans_start(I->coh, &(I->tid), NULL, 0, IOD_TRANS_W, NULL);
 		IOD_RETURN_ON_ERROR("iod_trans_start", ret);
 		IDEBUG(I->myrank, "iod_trans_start %d : success", I->tid );
 	}
-	MPI_Barrier(mcom);
+        IOD_Barrier(I);
 
 	/* create the obj */
 	/* only rank 0 does create then a barrier */
@@ -220,7 +311,7 @@ open_wr(iod_state_t *I, char *filename, MPI_Comm mcom) {
 			IDEBUG(I->myrank,"iod obj %lli created successfully.",I->oid);
 		}
 	}
-	MPI_Barrier(mcom);
+	IOD_Barrier(I);
 
 	/* now open the obj */
 	ret = iod_obj_open_write(I->coh, I->oid, I->tid, NULL, &(I->oh), NULL);
@@ -279,6 +370,7 @@ static int ContainerOpen(char *testFileName, IOR_param_t * param,
 {
     int rc = -ENOSYS;
     iod_hint_list_t *con_open_hint = NULL;
+    unsigned int mode;
 
     /*
     con_open_hint = (iod_hint_list_t *)malloc(sizeof(iod_hint_list_t) + sizeof(iod_hint_t));
@@ -286,11 +378,18 @@ static int ContainerOpen(char *testFileName, IOR_param_t * param,
     con_open_hint->hint[0].key = "iod_hint_co_scratch_cksum";
     */
 
+    /* since we only open once, then we need to open RDWR */
+    mode = IOD_CONT_RW | IOD_CONT_CREATE;
+
     /* open and create the container here */
+    IOD_Barrier(istate);
     IDEBUG(istate->myrank, "About to open container %s with %d ranks", 
                             testFileName, istate->nranks );
     rc = iod_container_open(testFileName, con_open_hint, 
-        IOD_CONT_CREATE|IOD_CONT_RW, &(istate->coh), NULL);
+        mode, &(istate->coh), NULL);
+    IOD_Barrier(istate);
+    IDEBUG(istate->myrank, "Done open container %s with %d ranks: %d", 
+                            testFileName, istate->nranks, rc );
     return rc;
 }
 
@@ -310,35 +409,54 @@ static int SkipTidZero(iod_state_t *s, const char *target) {
     return rc;
 }
 
+static int IOD_Init(char *filename, IOR_param_t *param) {
+    int rc;
+    istate = Init(param);
+
+    IOD_Barrier(istate);
+    rc = ContainerOpen(filename, param, istate);
+    DCHECK(rc, "%s:%d", __FILE__, __LINE__);
+    IOD_Barrier(istate);
+    return rc;
+} 
+
+static int IOD_Fini(char *filename, IOR_param_t *param) {
+    int rc;
+    IDEBUG(istate->myrank,"About to close container");
+    rc = iod_container_close(istate->coh, NULL, NULL);
+    IDEBUG(istate->myrank,"Closed container: %d", rc);
+    IOD_RETURN_ON_ERROR("iod_container_close",rc);
+    rc = iod_finalize(NULL);
+    IDEBUG(istate->myrank,"iod_finalize: %d", rc);
+    return rc;
+}
+
 
 /*
  * Open a file through the IOD interface.
+ * Opens both the container in RDWR and the object 
+ * in whatever mode is necessary
  */
 static void *IOD_Open(char *testFileName, IOR_param_t * param)
 {
     int rc;
-    int rank;
-    MPI_Comm_rank(param->testComm,&rank);
-
-    if (!istate) {
-        istate = Init(param);
-    };
-
-    rc = ContainerOpen(testFileName, param, istate);
-    DCHECK(rc, "%s:%d", __FILE__, __LINE__);
+    //int rank;
+    //MPI_Comm_rank(param->testComm,&rank);
 
     if (param->open == WRITE) {
         rc = SkipTidZero(istate,testFileName);
         DCHECK(rc, "%s:%d", __FILE__, __LINE__);
-        IOD_Barrier(istate->myrank,istate->mcom);
+        IOD_Barrier(istate);
 
-        rc = open_wr(istate, testFileName, istate->mcom);
+        rc = open_wr(istate, testFileName);
         DCHECK(rc, "%s:%d", __FILE__, __LINE__);
     } else {
         assert(param->open == READ);
-        rc = open_rd(istate, testFileName, istate->mcom);
+        rc = open_rd(istate, testFileName);
     }
-    IOD_Barrier(istate->myrank, istate->mcom);
+    IOD_Barrier(istate);
+
+    return (void*)istate;
 }
 
 /*
@@ -347,66 +465,33 @@ static void *IOD_Open(char *testFileName, IOR_param_t * param)
 static IOR_offset_t IOD_Xfer(int access, void *file, IOR_size_t * buffer,
                    IOR_offset_t length, IOR_param_t * param)
 {
-    DCHECK(-ENOSYS,"%s:%d", __FILE__, __LINE__);
-    int xferRetries = 0;
-    long long remaining = (long long)length;
-    char *ptr = (char *)buffer;
+
+    iod_state_t *s = (iod_state_t*)file;
     long long rc;
-    int fd;
+    ssize_t bytes;
 
-    fd = *(int *)file;
+    IDEBUG(s->myrank, "Enter %s", __FUNCTION__);
 
-    /* seek to offset */
-    if (lseek64(fd, param->offset, SEEK_SET) == -1)
-        ERR("lseek64() failed");
-
-    while (remaining > 0) {
-        /* write/read file */
-        if (access == WRITE) {  /* WRITE */
-            if (verbose >= VERBOSE_4) {
-                fprintf(stdout,
-                    "task %d writing to offset %lld\n",
-                    rank,
-                    param->offset + length - remaining);
-            }
-            rc = write(fd, ptr, remaining);
-            if (rc == -1)
-                ERR("write() failed");
-            if (param->fsyncPerWrite == TRUE)
-                IOD_Fsync(&fd, param);
-        } else {    /* READ or CHECK */
-            if (verbose >= VERBOSE_4) {
-                fprintf(stdout,
-                    "task %d reading from offset %lld\n",
-                    rank,
-                    param->offset + length - remaining);
-            }
-            rc = read(fd, ptr, remaining);
-            if (rc == 0)
-                ERR("read() returned EOF prematurely");
-            if (rc == -1)
-                ERR("read() failed");
+    if (access == WRITE) {  /* WRITE */
+        rc = iod_write(s,(char*)buffer,length,param->offset, &bytes); 
+        IDEBUG(s->myrank, "iod_write %d: %d", (int)rc, (int)bytes);
+        if (rc == 0) {
+            assert(bytes==length);
+            return (length);
+        } else {
+            return -1; 
         }
-        if (rc < remaining) {
-            fprintf(stdout,
-                "WARNING: Task %d, partial %s, %lld of %lld bytes at offset %lld\n",
-                rank,
-                access == WRITE ? "write()" : "read()",
-                rc, remaining,
-                param->offset + length - remaining);
-            if (param->singleXferAttempt == TRUE)
-                MPI_CHECK(MPI_Abort(MPI_COMM_WORLD, -1),
-                      "barrier error");
-            if (xferRetries > MAX_RETRY)
-                ERR("too many retries -- aborting");
+    } else {
+        rc = iod_read(s,(char*)buffer,length,param->offset, &bytes); 
+        IDEBUG(s->myrank, "iod_read %d: %d", (int)rc, (int)bytes);
+        if (rc == 0) {
+            assert(bytes==length);
+            return (length);
+        } else {
+            return -1; 
         }
-        assert(rc >= 0);
-        assert(rc <= remaining);
-        remaining -= rc;
-        ptr += rc;
-        xferRetries++;
     }
-    return (length);
+    return -1;
 }
 
 /*
@@ -418,14 +503,48 @@ static void IOD_Fsync(void *fd, IOR_param_t * param)
         EWARN("fsync() failed");
 }
 
+/* this only close the object */
+int
+iod_close( iod_state_t *s) {
+	iod_ret_t ret;
+
+	/* close the object handle */
+	ret = iod_obj_close(s->oh, NULL, NULL);
+	IOD_RETURN_ON_ERROR("iod_obj_close",ret);
+
+	/* finish the transaction */
+	if (s->myrank == 0) {
+		ret = iod_trans_finish(s->coh, s->tid, NULL, 0, NULL);
+		IOD_RETURN_ON_ERROR("iod_trans_finish",ret);
+		IDEBUG(s->myrank,"iod_trans_finish %d: success", s->tid);
+	}
+	MPI_Barrier(s->mcom);
+	
+	return ret;
+}
+
 /*
  * Close a file through the IOD interface.
+ * Must close both the object and the container
  */
 static void IOD_Close(void *fd, IOR_param_t * param)
 {
+    iod_ret_t ret;
+    iod_state_t *s = (iod_state_t*)fd;
+
+    IOD_Barrier(s);
+    IDEBUG(s->myrank,"About to close object");
+    ret = iod_close(s);
+    IOD_DIE_ON_ERROR("iod_object_close",ret);
+    IDEBUG(s->myrank,"Closed object");
+    IOD_Barrier(s);
+
+    return; 
+    /*
     if (close(*(int *)fd) != 0)
         ERR("close() failed");
     free(fd);
+    */
 }
 
 /*
@@ -449,7 +568,7 @@ static void IOD_SetVersion(IOR_param_t * test)
 }
 
 /*
- * Use IOD stat() to return aggregate file size.
+ * Use IOD stat() to return aggregate file size of all objects moved
  */
 static IOR_offset_t IOD_GetFileSize(IOR_param_t * test, MPI_Comm testComm,
                       char *testFileName)
@@ -457,10 +576,13 @@ static IOR_offset_t IOD_GetFileSize(IOR_param_t * test, MPI_Comm testComm,
     struct stat stat_buf;
     IOR_offset_t aggFileSizeFromStat, tmpMin, tmpMax, tmpSum;
 
+    /* 
     if (stat(testFileName, &stat_buf) != 0) {
         ERR("stat() failed");
     }
     aggFileSizeFromStat = stat_buf.st_size;
+    */
+    aggFileSizeFromStat = 0;
 
     if (test->filePerProc == TRUE) {
         MPI_CHECK(MPI_Allreduce(&aggFileSizeFromStat, &tmpSum, 1,

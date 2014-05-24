@@ -13,6 +13,10 @@ endif
 if USE_MPIIO_AIORI
 ior_SOURCES += aiori-MPIIO.c
 endif
+if USE_IOD_AIORI
+ior_SOURCES += aiori-IOD.c
+ior_LDADD += -liod -lplfs -lpthread -ldaos -lmchecksum
+endif
 if USE_HDF5_AIORI
 ior_SOURCES += aiori-HDF5.c
 ior_LDADD += -lhdf5 -lz

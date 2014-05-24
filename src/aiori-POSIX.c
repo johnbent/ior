@@ -77,7 +77,9 @@ ior_aiori_t posix_aiori = {
         POSIX_Delete,
         POSIX_SetVersion,
         POSIX_Fsync,
-        POSIX_GetFileSize
+        POSIX_GetFileSize,
+        NULL,
+        NULL
 };
 
 /***************************** F U N C T I O N S ******************************/

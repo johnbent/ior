@@ -83,6 +83,7 @@ static void TestIoSys(IOR_test_t *);
 static void ValidTests(IOR_param_t *);
 static IOR_offset_t WriteOrRead(IOR_param_t *, void *, int);
 static void WriteTimes(IOR_param_t *, double **, int, int);
+static int ApiNeedsThreads(int, char **);
 
 /********************************** M A I N ***********************************/
 
@@ -103,9 +104,19 @@ int main(int argc, char **argv)
                         return (0);
                 }
         }
-
-        /* start the MPI code */
-        MPI_CHECK(MPI_Init(&argc, &argv), "cannot initialize MPI");
+    
+        /* start the MPI code, some API's (e.g. IOD) need thread support */
+        if (ApiNeedsThreads(argc,argv)) { 
+                int avail;
+                MPI_CHECK(MPI_Init_thread(&argc, &argv, MPI_THREAD_MULTIPLE, 
+                        &avail), "cannot initialize MPI with threads");
+                if (avail != MPI_THREAD_MULTIPLE) {
+                        fprintf(stderr, "ERR: Init MPI with threads.\n");
+                        return -1;
+                }
+        } else {
+                MPI_CHECK(MPI_Init(&argc, &argv), "cannot initialize MPI");
+        }
         MPI_CHECK(MPI_Comm_size(MPI_COMM_WORLD, &numTasksWorld),
                   "cannot get number of tasks");
         MPI_CHECK(MPI_Comm_rank(MPI_COMM_WORLD, &rank), "cannot get rank");
@@ -674,6 +685,19 @@ static void DisplayFreespace(IOR_param_t * test)
         ShowFileSystemSize(fileName);
 
         return;
+}
+
+/*
+ * Early check of args to see which MPI_Init is needed
+ */
+static int ApiNeedsThreads(int argc, char **argv) {
+    int i;
+    for (i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "-a") == 0) {
+            return (!strcmp(argv[i+1],"IOD"));
+        }
+    }
+    return 0;
 }
 
 /*
@@ -1976,6 +2000,14 @@ static void TestIoSys(IOR_test_t *test)
 
         startTime = GetTimeStamp();
 
+        /* now that backend has been set, init if necessary */
+        if (backend->init) {
+            GetTestFileName(testFileName, params);
+            if ( backend->init(testFileName, params) != 0 ) {
+                ERR("init failed");
+            }
+        }
+
         /* loop over test iterations */
         for (rep = 0; rep < params->repetitions; rep++) {
 
@@ -2229,6 +2261,14 @@ static void TestIoSys(IOR_test_t *test)
                 }
                 params->errorFound = FALSE;
                 rankOffset = 0;
+        }
+
+        /* now that tests are done, fini if necessary */
+        if (backend->fini) {
+            GetTestFileName(testFileName, params);
+            if ( backend->fini(testFileName, params) != 0 ) {
+                ERR("fini failed");
+            }
         }
 
         MPI_CHECK(MPI_Comm_free(&testComm), "MPI_Comm_free() error");
