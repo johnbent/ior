@@ -15,7 +15,7 @@ ior_SOURCES += aiori-MPIIO.c
 endif
 if USE_IOD_AIORI
 ior_SOURCES += aiori-IOD.c
-ior_LDADD += -liod -lplfs -lpthread -ldaos -lmchecksum
+ior_LDADD += -liod -lplfs -lpthread -lmchecksum
 endif
 if USE_HDF5_AIORI
 ior_SOURCES += aiori-HDF5.c
