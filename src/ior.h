@@ -135,7 +135,8 @@ typedef struct
     int intraTestBarriers;           /* barriers between open/op and op/close */
 
     /* IOD variables */
-    /* no IOD variables yet */
+    int persist_daos;               /* whether to persist at write close to daos */
+    /* maybe later add a purge */
 } IOR_param_t;
 
 /* each pointer is to an array, each of length equal to the number of

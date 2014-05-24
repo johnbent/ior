@@ -212,6 +212,8 @@ void DecodeDirective(char *line, IOR_param_t *params)
                 params->preallocate = atoi(value);
         } else if (strcasecmp(option, "storefileoffset") == 0) {
                 params->storeFileOffset = atoi(value);
+        } else if (strcasecmp(option, "persistdaos") == 0) {
+                params->persist_daos = atoi(value);
         } else if (strcasecmp(option, "usefileview") == 0) {
                 params->useFileView = atoi(value);
         } else if (strcasecmp(option, "usesharedfilepointer") == 0) {
@@ -405,7 +407,7 @@ IOR_test_t *ReadConfigScript(char *scriptName)
 IOR_test_t *ParseCommandLine(int argc, char **argv)
 {
         static const char *opts =
-          "a:A:b:BcCd:D:eEf:FgG:hHi:Ij:J:kKlmM:nN:o:O:pPqQ:rRs:St:T:uU:vVwWxX:YzZ";
+          "a:A:b:BcCd:D:eEf:FgG:hHi:Ij:J:kKlLmM:nN:o:O:pPqQ:rRs:St:T:uU:vVwWxX:YzZ";
         int c, i;
         static IOR_test_t *tests = NULL;
 
@@ -501,6 +503,9 @@ IOR_test_t *ParseCommandLine(int argc, char **argv)
                         break;
                 case 'l':
                         initialTestParams.storeFileOffset = TRUE;
+                        break;
+                case 'L':
+                        initialTestParams.persist_daos = TRUE;
                         break;
 		case 'M':
                         initialTestParams.memoryPerNode =

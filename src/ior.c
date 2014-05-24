@@ -201,6 +201,7 @@ void init_IOR_Param_t(IOR_param_t * p)
         p->testComm = MPI_COMM_WORLD;
         p->setAlignment = 1;
         p->lustre_start_ost = -1;
+        p->persist_daos = 0;
 }
 
 /*
@@ -730,6 +731,7 @@ static void DisplayUsage(char **argv)
                 " -k    keepFile -- don't remove the test file(s) on program exit",
                 " -K    keepFileWithError  -- keep error-filled file(s) after data-checking",
                 " -l    storeFileOffset -- use file offset as stored signature",
+                " -L    persistdaos -- IOD flag telling it to persist to DAOS",
                 " -m    multiFile -- use number of reps (-i) for multiple file count",
                 " -M N  memoryPerNode -- hog memory on the node  (e.g.: 2g, 75%)",
                 " -n    noFill -- no fill in HDF5 file creation",
@@ -1501,6 +1503,10 @@ static void ShowSetup(IOR_param_t *params)
                 printf(params->collective == FALSE ? ", independent" : ", collective");
         }
         printf("\n");
+        if (strcmp(params->api, "IOD") == 0) {
+            printf("\tdaos persist       = %s\n", 
+                params->persist_daos ? "TRUE" : "FALSE");
+        }
         if (verbose >= VERBOSE_1) {
                 if (params->segmentCount > 1) {
                         fprintf(stdout,
@@ -1614,6 +1620,7 @@ static void ShowTest(IOR_param_t * test)
         fprintf(stdout, "\t%s=%d\n", "useFileView", test->useFileView);
         fprintf(stdout, "\t%s=%lld\n", "setAlignment", test->setAlignment);
         fprintf(stdout, "\t%s=%d\n", "storeFileOffset", test->storeFileOffset);
+        fprintf(stdout, "\t%s=%d\n", "persistToDAOS", test->persist_daos);
         fprintf(stdout, "\t%s=%d\n", "useSharedFilePointer",
                 test->useSharedFilePointer);
         fprintf(stdout, "\t%s=%d\n", "useO_DIRECT", test->useO_DIRECT);
