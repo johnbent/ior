@@ -64,6 +64,9 @@ ior_aiori_t *available_aiori[] = {
 #ifdef USE_NCMPI_AIORI
         &ncmpi_aiori,
 #endif
+#ifdef USE_DAOS_AIORI
+        &daos_aiori,
+#endif
         NULL
 };
 
@@ -104,7 +107,7 @@ int main(int argc, char **argv)
                         return (0);
                 }
         }
-    
+
         /* start the MPI code, some API's (e.g. IOD) need thread support */
         if (ApiNeedsThreads(argc,argv)) { 
                 int avail;
@@ -202,6 +205,9 @@ void init_IOR_Param_t(IOR_param_t * p)
         p->setAlignment = 1;
         p->lustre_start_ost = -1;
         p->persist_daos = 0;
+        p->daos_n_shards = -1;
+        p->daos_n_targets = -1;
+        p->daos_n_aios = 1;
 }
 
 /*
@@ -708,7 +714,7 @@ static void DisplayUsage(char **argv)
 {
         char *opts[] = {
                 "OPTIONS:",
-                " -a S  api --  API for I/O [POSIX|MPIIO|HDF5|NCMPI|IOD]",
+                " -a S  api --  API for I/O [POSIX|MPIIO|HDF5|NCMPI|IOD|DAOS]",
                 " -A N  refNum -- user supplied reference number to include in the summary",
                 " -b N  blockSize -- contiguous bytes to write per task  (e.g.: 8, 4k, 2m, 1g)",
                 " -B    useO_DIRECT -- uses O_DIRECT for POSIX, bypassing I/O buffers",
@@ -1546,6 +1552,7 @@ static void ShowSetup(IOR_param_t *params)
         printf("\trepetitions        = %d\n", params->repetitions);
         printf("\txfersize           = %s\n",
                 HumanReadable(params->transferSize, BASE_TWO));
+        printf("\taios               = %d\n", params->daos_n_aios);
         printf("\tblocksize          = %s\n",
                 HumanReadable(params->blockSize, BASE_TWO));
         printf("\taggregate filesize = %s\n",

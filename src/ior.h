@@ -126,6 +126,14 @@ typedef struct
     int lustre_set_striping;         /* flag that we need to set lustre striping */
     int lustre_ignore_locks;
 
+    /* DAOS variables */
+    int daos_n_shards;
+    int daos_n_targets;
+    int daos_n_aios;                 /* max number of concurrent async I/Os */
+    int daos_writeonly;              /* write only, no flush and commit */
+    unsigned long daos_epoch;        /* epoch to access */
+    unsigned long daos_wait;         /* epoch to wait for before reading */
+
     /* gpfs variables */
     int gpfs_hint_access;          /* use gpfs "access range" hint */
     int gpfs_release_token;        /* immediately release GPFS tokens after

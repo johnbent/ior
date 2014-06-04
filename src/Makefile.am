@@ -4,7 +4,7 @@ bin_PROGRAMS += IOR
 endif
 
 ior_SOURCES = ior.c utilities.c parse_options.c
-ior_SOURCES += ior.h utilities.h parse_options.h aiori.h iordef.h
+ior_SOURCES += ior.h utilities.h parse_options.h aiori.h iordef.h 
 ior_LDADD =
 
 if USE_POSIX_AIORI
@@ -13,10 +13,6 @@ endif
 if USE_MPIIO_AIORI
 ior_SOURCES += aiori-MPIIO.c
 endif
-if USE_IOD_AIORI
-ior_SOURCES += aiori-IOD.c
-ior_LDADD += -liod -lplfs -lpthread -lmchecksum
-endif
 if USE_HDF5_AIORI
 ior_SOURCES += aiori-HDF5.c
 ior_LDADD += -lhdf5 -lz
@@ -24,6 +20,14 @@ endif
 if USE_NCMPI_AIORI
 ior_SOURCES += aiori-NCMPI.c
 ior_LDADD += -lpnetcdf
+endif
+if USE_IOD_AIORI
+ior_SOURCES += aiori-IOD.c
+ior_LDADD += -liod -lplfs -lpthread -lmchecksum
+endif
+if USE_DAOS_AIORI
+ior_SOURCES += aiori-DAOS.c list.h
+ior_LDADD += -ldaos
 endif
 
 IOR_SOURCES = $(ior_SOURCES)

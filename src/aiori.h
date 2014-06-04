@@ -66,9 +66,10 @@ typedef struct ior_aiori {
 
 ior_aiori_t posix_aiori;
 ior_aiori_t mpiio_aiori;
-ior_aiori_t iod_aiori;
 ior_aiori_t hdf5_aiori;
 ior_aiori_t ncmpi_aiori;
+ior_aiori_t daos_aiori;
+ior_aiori_t iod_aiori;
 
 IOR_offset_t MPIIO_GetFileSize(IOR_param_t * test, MPI_Comm testComm,
                                char *testFileName);

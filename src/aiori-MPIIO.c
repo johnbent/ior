@@ -54,8 +54,8 @@ ior_aiori_t mpiio_aiori = {
         MPIIO_SetVersion,
         MPIIO_Fsync,
         MPIIO_GetFileSize,
-        NULL,   /* no init needed */
-        NULL    /* no fini needed */
+        NULL,
+        NULL
 };
 
 /***************************** F U N C T I O N S ******************************/
