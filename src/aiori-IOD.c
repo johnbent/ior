@@ -47,6 +47,8 @@
 #include <iod_types.h>
 #include <plfs.h>
 
+#include <libgen.h>
+
 #ifndef   open64        /* necessary for TRU64 -- */
 #define open64  open        /* unlikely, but may pose */
 #endif  /* not open64 */            /* conflicting prototypes */
@@ -375,6 +377,7 @@ static int ContainerOpen(char *testFileName, IOR_param_t * param,
     int rc = -ENOSYS;
     iod_hint_list_t *con_open_hint = NULL;
     unsigned int mode;
+    char *cname = NULL; /* get basename of the testFileName */
 
     /* the passed in filename might have been changed for file-per-proc */
     /* for iod, we want one container, for file-per-proc, use different oid */
@@ -395,9 +398,11 @@ static int ContainerOpen(char *testFileName, IOR_param_t * param,
 
     /* open and create the container here */
     IOD_Barrier(istate);
-    IDEBUG(istate->myrank, "About to open container %s with %d ranks", 
-                            testFileName, istate->nranks );
-    rc = iod_container_open(testFileName, con_open_hint, 
+    cname = basename(testFileName); 
+    if (!cname) cname = testFileName;
+    IDEBUG(istate->myrank, "About to open container %s (base %s) with %d ranks",
+                    testFileName, cname,istate->nranks );
+    rc = iod_container_open(cname, con_open_hint, 
         mode, &(istate->coh), NULL);
     IOD_Barrier(istate);
     IDEBUG(istate->myrank, "Done open container %s with %d ranks: %d", 
