@@ -115,18 +115,20 @@ static iod_state_t *istate = NULL;
 
 enum {
     DEBUG_ZERO, /* only rank 0 prints msg */
-    DEBUG_ALL,  /* all ranks print msg */
+    DEBUG_ALL,  /* all ranks print msg unless pass -1 to suppress */
     DEBUG_NONE, /* total silence */
+    DEBUG_EVERY, /* all ranks including Xfer */
 };
+static int verbosity_level = DEBUG_ZERO;
 
 
 int
 debug_on(int rank) {
-    int verbosity_level = DEBUG_NONE;
     switch(verbosity_level) {
             case DEBUG_ZERO: return (rank == 0);
             case DEBUG_NONE: return 0;
-            case DEBUG_ALL: return 1;
+            case DEBUG_ALL: return (rank != -1);
+            case DEBUG_EVERY: return 1;
     }
 }
 
@@ -329,6 +331,14 @@ static iod_state_t * Init(IOR_param_t *param)
 {
     int rc;
     iod_state_t *istate;
+
+    switch(param->verbose) {
+    case 0: verbosity_level = DEBUG_NONE; break; 
+    case 1: verbosity_level = DEBUG_ZERO; break;
+    case 2: verbosity_level = DEBUG_ALL; break;
+    default: verbosity_level = DEBUG_EVERY; break;
+    } 
+
     istate = malloc(sizeof(iod_state_t));
     DCHECK(istate==NULL?-1:0,"malloc failed");
 
@@ -363,6 +373,23 @@ static iod_state_t * Init(IOR_param_t *param)
     return istate;
 }
 
+static char *iod_cname( char *path, IOR_param_t *param ) {
+    static char *cname = NULL;
+
+    /* the passed in filename might have been changed for file-per-proc */
+    /* for iod, we want one container, for file-per-proc, use different oid */
+    if (param->filePerProc == TRUE) {
+        IDEBUG(istate->myrank,"use container %s instead of %s", 
+                param->testFileName, path);
+        path = param->testFileName;
+    }
+
+    cname = NULL;
+    cname = basename(path);
+    if (!cname) cname = path;
+    return cname;
+}
+
 /*
  * Creat and open a file through the IOD interface.
  */
@@ -377,15 +404,7 @@ static int ContainerOpen(char *testFileName, IOR_param_t * param,
     int rc = -ENOSYS;
     iod_hint_list_t *con_open_hint = NULL;
     unsigned int mode;
-    char *cname = NULL; /* get basename of the testFileName */
-
-    /* the passed in filename might have been changed for file-per-proc */
-    /* for iod, we want one container, for file-per-proc, use different oid */
-    if (param->filePerProc == TRUE) {
-        IDEBUG(istate->myrank,"open container %s instead of %s", 
-                param->testFileName, testFileName);
-        testFileName = param->testFileName;
-    }
+    char *cname = iod_cname(testFileName,param);
 
     /*
     con_open_hint = (iod_hint_list_t *)malloc(sizeof(iod_hint_list_t) + sizeof(iod_hint_t));
@@ -398,8 +417,6 @@ static int ContainerOpen(char *testFileName, IOR_param_t * param,
 
     /* open and create the container here */
     IOD_Barrier(istate);
-    cname = basename(testFileName); 
-    if (!cname) cname = testFileName;
     IDEBUG(istate->myrank, "About to open container %s (base %s) with %d ranks",
                     testFileName, cname,istate->nranks );
     rc = iod_container_open(cname, con_open_hint, 
@@ -486,29 +503,24 @@ static IOR_offset_t IOD_Xfer(int access, void *file, IOR_size_t * buffer,
     iod_state_t *s = (iod_state_t*)file;
     long long rc;
     ssize_t bytes;
+    // don't use rank because too verbose for DEBUG_ZERO
+    // instead use -1 so only see if at DEBUG_ALL
+    int verbosity = -1;
 
-    IDEBUG(s->myrank, "Enter %s", __FUNCTION__);
-
+    IDEBUG(verbosity, "Enter %s", __FUNCTION__);
     if (access == WRITE) {  /* WRITE */
         rc = iod_write(s,(char*)buffer,length,param->offset, &bytes); 
-        IDEBUG(s->myrank, "iod_write %d: %d", (int)rc, (int)bytes);
-        if (rc == 0) {
-            assert(bytes==length);
-            return (length);
-        } else {
-            return -1; 
-        }
     } else {
         rc = iod_read(s,(char*)buffer,length,param->offset, &bytes); 
-        IDEBUG(s->myrank, "iod_read %d: %d", (int)rc, (int)bytes);
-        if (rc == 0) {
-            assert(bytes==length);
-            return (length);
-        } else {
-            return -1; 
-        }
     }
-    return -1;
+    IDEBUG(verbosity, "iod_%s %d: %d", (access==WRITE)?"write":"read",
+        (int)rc, (int)bytes);
+    if (rc == 0) {
+        assert(bytes==length);
+        return (length);
+    } else {
+        return -1; 
+    }
 }
 
 /*
@@ -580,28 +592,36 @@ static void IOD_Close(void *fd, IOR_param_t * param)
         iod_persist(s);
         persist_time = MPI_Wtime() - persist_time;
         if(s->myrank==0) {
-            printf("IOD Persist Time: %.2f\n",persist_time);
+            printf("IOD Persist Time: %.2f Bandwidth: %.2f\n",persist_time,
+                (param->expectedAggFileSize/1048576)/persist_time);
         }
     }
 
     return; 
-    /*
-    if (close(*(int *)fd) != 0)
-        ERR("close() failed");
-    free(fd);
-    */
 }
 
 /*
  * Delete a file through the IOD interface.
+ * Currently a no-op....
  */
 static void IOD_Delete(char *testFileName, IOR_param_t * param)
 {
-    char errmsg[256];
-    sprintf(errmsg, "[RANK %03d]: unlink() of file \"%s\" failed\n",
-        rank, testFileName);
-    if (unlink(testFileName) != 0)
+    iod_ret_t ret = 0;
+    char *cname = iod_cname(testFileName, param);
+    IDEBUG(istate->myrank, "NOOP: iod_container_unlink %s", cname);
+    //ret = iod_container_unlink(cname, 1, NULL);
+    if (ret != 0) {
+        char errmsg[256];
+        sprintf(errmsg, "[RANK %03d]: unlink() of file \"%s\" failed\n",
+                rank, testFileName);
         EWARN(errmsg);
+        /*assert(0); // why doesn't work? */
+        /*
+        // try regular
+        if (unlink(testFileName) != 0)
+                EWARN(errmsg);
+        */
+    }
 }
 
 /*
@@ -628,6 +648,7 @@ static IOR_offset_t IOD_GetFileSize(IOR_param_t * test, MPI_Comm testComm,
     aggFileSizeFromStat = stat_buf.st_size;
     */
     aggFileSizeFromStat = 0;
+
     /* just cheat since IOD can't stat */
     return test->expectedAggFileSize;
 
