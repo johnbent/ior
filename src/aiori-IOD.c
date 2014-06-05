@@ -459,6 +459,7 @@ static int IOD_Fini(char *filename, IOR_param_t *param) {
     IDEBUG(istate->myrank,"About to close container");
     rc = iod_container_close(istate->coh, NULL, NULL);
     IDEBUG(istate->myrank,"Closed container: %d", rc);
+    IOD_Barrier(istate);
     IOD_RETURN_ON_ERROR("iod_container_close",rc);
     rc = iod_finalize(NULL);
     IDEBUG(istate->myrank,"iod_finalize: %d", rc);
