@@ -94,6 +94,7 @@ typedef struct iod_parameters_s {
 	int checksum;
 } iod_parameters_t;
 
+#define TIME_MSG_LEN 8192
 typedef struct iod_state_s {
 	iod_trans_id_t tid;
 	iod_handle_t coh;
@@ -106,7 +107,9 @@ typedef struct iod_state_s {
 	iod_checksum_t *cksum;
 	MPI_Comm mcom;
 	int myrank;
-    int nranks;
+        int nranks;
+        char times[TIME_MSG_LEN];
+        double timer;
 } iod_state_t;
 
 static iod_state_t *istate = NULL; 
@@ -176,6 +179,26 @@ do {                                    \
         MPI_Abort(MPI_COMM_WORLD, -1);              \
     }                                   \
 } while (0);
+
+static void start_timer() {
+    assert(istate != NULL);
+    istate->timer = MPI_Wtime();
+}
+
+static void add_timer(char *op) {
+    snprintf(&(istate->times[strlen(istate->times)]),
+        TIME_MSG_LEN - strlen(istate->times), "\tIOD %s Time: %.4f\n", op,
+        MPI_Wtime() - istate->timer);
+}
+
+static void add_bandwidth(char *op, IOR_offset_t len) {
+    snprintf(&(istate->times[strlen(istate->times)]),
+        TIME_MSG_LEN - strlen(istate->times), 
+        "\tIOD %s Time: %.4f Bandwidth MB/s: %.2f\n", 
+        op, MPI_Wtime() - istate->timer,
+        (len / 1048576) / (MPI_Wtime() - istate->timer));
+
+}
 
 static void IOD_Barrier(iod_state_t *s) {
     IDEBUG(s->myrank, "MPI_Barrier");
@@ -277,7 +300,9 @@ open_rd(iod_state_t *s, char *filename, IOR_param_t *param) {
 	}
 	IOD_Barrier(s);
 
+        start_timer();
 	ret = iod_obj_open_read(s->coh, s->oid, s->tid, NULL, &(s->oh), NULL);
+        add_timer("iod_obj_open_read");
 	IOD_RETURN_ON_ERROR("iod_obj_open_read", ret);
 	return ret;
 }
@@ -294,6 +319,7 @@ open_wr(iod_state_t *I, char *filename, IOR_param_t *param) {
 		IOD_RETURN_ON_ERROR("iod_trans_start", ret);
 		IDEBUG(I->myrank, "iod_trans_start %d : success", I->tid );
 	}
+        start_timer();
         IOD_Barrier(I);
 
 	/* create the obj */
@@ -320,17 +346,19 @@ open_wr(iod_state_t *I, char *filename, IOR_param_t *param) {
 		}
 	}
 	IOD_Barrier(I);
+        add_timer("iod_obj_create");
 
 	/* now open the obj */
+        start_timer();
 	ret = iod_obj_open_write(I->coh, I->oid, I->tid, NULL, &(I->oh), NULL);
 	IOD_RETURN_ON_ERROR("iod_obj_open_write", ret);
+        add_timer("iod_obj_open_write");
 	return ret;	
 }
 
 static iod_state_t * Init(IOR_param_t *param)
 {
     int rc;
-    iod_state_t *istate;
 
     switch(param->verbose) {
     case 0: verbosity_level = DEBUG_NONE; break; 
@@ -340,14 +368,17 @@ static iod_state_t * Init(IOR_param_t *param)
     } 
 
     istate = malloc(sizeof(iod_state_t));
+    memset(istate, 0, sizeof(*istate));
     DCHECK(istate==NULL?-1:0,"malloc failed");
 
     istate->mcom = param->testComm;
     MPI_Comm_rank(istate->mcom, &(istate->myrank));
     MPI_Comm_size(istate->mcom, &(istate->nranks));
+    start_timer();
     IDEBUG(rank,"About to init");
     rc = iod_initialize(istate->mcom, NULL, istate->nranks, istate->nranks);
     IDEBUG(rank,"Done with init");
+    add_timer("iod_initialize");
     DCHECK(rc, "%s:%d", __FILE__, __LINE__);
     if (rc != 0) {
         free(istate);
@@ -368,7 +399,6 @@ static iod_state_t * Init(IOR_param_t *param)
     } else {
         istate->cksum = NULL;
     }
-    
 
     return istate;
 }
@@ -416,12 +446,14 @@ static int ContainerOpen(char *testFileName, IOR_param_t * param,
     mode = IOD_CONT_RW | IOD_CONT_CREATE;
 
     /* open and create the container here */
+    start_timer();
     IOD_Barrier(istate);
     IDEBUG(istate->myrank, "About to open container %s (base %s) with %d ranks",
                     testFileName, cname,istate->nranks );
     rc = iod_container_open(cname, con_open_hint, 
         mode, &(istate->coh), NULL);
     IOD_Barrier(istate);
+    add_timer("Container open");
     IDEBUG(istate->myrank, "Done open container %s with %d ranks: %d", 
                             testFileName, istate->nranks, rc );
     return rc;
@@ -445,24 +477,34 @@ static int SkipTidZero(iod_state_t *s, const char *target) {
 
 static int IOD_Init(char *filename, IOR_param_t *param) {
     int rc;
-    istate = Init(param);
+    Init(param);
 
     IOD_Barrier(istate);
     rc = ContainerOpen(filename, param, istate);
     DCHECK(rc, "%s:%d", __FILE__, __LINE__);
     IOD_Barrier(istate);
+
     return rc;
 } 
 
 static int IOD_Fini(char *filename, IOR_param_t *param) {
     int rc;
+    start_timer();
     IDEBUG(istate->myrank,"About to close container");
     rc = iod_container_close(istate->coh, NULL, NULL);
     IDEBUG(istate->myrank,"Closed container: %d", rc);
     IOD_Barrier(istate);
+    add_timer("iod_container_close");
     IOD_RETURN_ON_ERROR("iod_container_close",rc);
+    start_timer();
     rc = iod_finalize(NULL);
     IDEBUG(istate->myrank,"iod_finalize: %d", rc);
+    add_timer("iod_finalize");
+
+    if(istate->myrank==0) {
+        printf("%s", istate->times);
+    }
+
     return rc;
 }
 
@@ -479,9 +521,11 @@ static void *IOD_Open(char *testFileName, IOR_param_t * param)
     //MPI_Comm_rank(param->testComm,&rank);
 
     if (param->open == WRITE) {
+        start_timer();
         rc = SkipTidZero(istate,testFileName);
         DCHECK(rc, "%s:%d", __FILE__, __LINE__);
         IOD_Barrier(istate);
+        add_timer("skip tid0");
 
         rc = open_wr(istate, testFileName, param);
         DCHECK(rc, "%s:%d", __FILE__, __LINE__);
@@ -580,22 +624,22 @@ static void IOD_Close(void *fd, IOR_param_t * param)
 {
     iod_ret_t ret;
     iod_state_t *s = (iod_state_t*)fd;
+    char func_name[128];
 
+    start_timer();
     IOD_Barrier(s);
     IDEBUG(s->myrank,"About to close object");
     ret = iod_close(s);
     IOD_DIE_ON_ERROR("iod_object_close",ret);
     IDEBUG(s->myrank,"Closed object");
     IOD_Barrier(s);
+    sprintf(func_name, "iod_obj_close_%s", param->open==WRITE?"write":"read");
+    add_timer(func_name);
 
     if (param->open == WRITE && param->persist_daos) {
-        double persist_time = MPI_Wtime();
+        start_timer();
         iod_persist(s);
-        persist_time = MPI_Wtime() - persist_time;
-        if(s->myrank==0) {
-            printf("IOD Persist Time: %.2f Bandwidth: %.2f\n",persist_time,
-                (param->expectedAggFileSize/1048576)/persist_time);
-        }
+        add_bandwidth("Persist", param->expectedAggFileSize);
     }
 
     return; 
