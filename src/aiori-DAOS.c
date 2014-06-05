@@ -581,7 +581,7 @@ static IOR_offset_t DAOS_Xfer(int access, void *file, IOR_size_t *buffer,
         assert(!param->randomOffset);
         assert(!param->reorderTasks);
         assert(!param->reorderTasksRandom);
-        assert(param->segmentCount == 1);
+        //assert(param->segmentCount == 1);
 
         offset = param->offset - rank * param->blockSize;
 
