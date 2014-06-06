@@ -93,6 +93,16 @@ static CFS_LIST_HEAD(aios);
 
 /***************************** F U N C T I O N S ******************************/
 
+
+#define START_TIME(X) X = MPI_Wtime();
+#define PRINT_TIME(X,Y) \
+do { \
+  if (rank==0) { \
+    printf("DAOS TIME DEBUG: %s took %.2f seconds\n", Y, MPI_Wtime() - X); \
+  } \
+} while (0);
+
+
 #define DCHECK(rc, format, ...)                                         \
 do {                                                                    \
         int _rc = (rc);                                                 \
@@ -224,6 +234,7 @@ static void shard_add(daos_handle_t container, daos_epoch_t epoch,
         unsigned int *t;
         int           i;
         int           rc;
+        double        ts;
 
         s = malloc((sizeof *s) * param->daos_n_shards);
         if (s == NULL)
@@ -238,8 +249,10 @@ static void shard_add(daos_handle_t container, daos_epoch_t epoch,
                 t[i] = targets[i % param->daos_n_targets];
         }
 
+        START_TIME(ts);
         rc = daos_shard_add(container, epoch, param->daos_n_shards, t, s,
                             NULL /* synchronous */);
+        PRINT_TIME(ts,"daos_shard_add");
         DCHECK(rc, "Failed to create shards");
 
         free(t);
@@ -257,15 +270,18 @@ static void ContainerOpen(char *testFileName, IOR_param_t *param,
                 daos_container_status_t status;
                 struct daos_epoch_info  einfo;
                 unsigned int            dMode;
+                double ts;
 
                 if (param->open == WRITE)
                         dMode = DAOS_COO_RW | DAOS_COO_CREATE;
                 else
                         dMode = DAOS_COO_RO;
 
+                START_TIME(ts);
                 rc = daos_container_open(testFileName, dMode, param->numTasks,
                                          &status, container,
                                          NULL /* synchronous */);
+                PRINT_TIME(ts, "daos_container_open");
                 DCHECK(rc, "Failed to open container %s", testFileName);
                 if (status != DAOS_CONTAINER_ST_OK)
                         ERR("Container not okay");
@@ -294,11 +310,16 @@ static void ContainerOpen(char *testFileName, IOR_param_t *param,
 
                 if (param->open == WRITE && hce->seq == 0) {
                         daos_epoch_t e = {hce->seq + 1};
+                        double ts;
 
+                        START_TIME(ts);
                         shard_add(*container, e, param);
+                        PRINT_TIME(ts,"shard_add");
 
+                        START_TIME(ts);
                         rc = daos_epoch_commit(*container, e, 1 /* sync */,
                                                NULL, NULL /* synchronous */);
+                        PRINT_TIME(ts,"daos_epoch_commit");
                         DCHECK(rc, "Failed to commit shard creation");
 
                         *hce = e;
@@ -475,6 +496,7 @@ static void *DAOS_Open(char *testFileName, IOR_param_t *param)
 {
         struct fileDescriptor *fd;
         char                  *dir;
+        double                ts;
 
         if (!initialized) {
                 Init();
@@ -505,7 +527,9 @@ static void *DAOS_Open(char *testFileName, IOR_param_t *param)
          * If param->open is not WRITE, the container must be created by a
          * "symmetrical" write session first.
          */
+        START_TIME(ts); 
         ContainerOpen(testFileName, param, &fd->container, &fd->hce);
+        PRINT_TIME(ts,"ContainerOpen");
 
         if (param->open == WRITE) {
                 if (param->daos_epoch == 0)
@@ -672,9 +696,12 @@ static void DAOS_Close(void *file, IOR_param_t *param)
                           "Failed to synchronize processes");
 
                 if (rank == 0) {
+                        double ts;
+                        START_TIME(ts);
                         rc = daos_epoch_commit(fd->container, fd->epoch,
                                                1 /* sync */, NULL,
                                                NULL /* synchronous */);
+                        PRINT_TIME(ts,"daos_epoch_commit");
                         DCHECK(rc, "Failed to commit object write");
                 }
 
