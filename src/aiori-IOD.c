@@ -187,14 +187,14 @@ static void start_timer() {
 
 static void add_timer(char *op) {
     snprintf(&(istate->times[strlen(istate->times)]),
-        TIME_MSG_LEN - strlen(istate->times), "\tIOD %s Time: %.4f\n", op,
+        TIME_MSG_LEN - strlen(istate->times), "\tIOD %s_time =  %.4f\n", op,
         MPI_Wtime() - istate->timer);
 }
 
 static void add_bandwidth(char *op, IOR_offset_t len) {
     snprintf(&(istate->times[strlen(istate->times)]),
         TIME_MSG_LEN - strlen(istate->times), 
-        "\tIOD %s Time: %.4f Bandwidth MB/s: %.2f\n", 
+        "\tIOD %s_time = %.4f Bandwidth MB/s = %.2f\n", 
         op, MPI_Wtime() - istate->timer,
         (len / 1048576) / (MPI_Wtime() - istate->timer));
 
@@ -453,7 +453,7 @@ static int ContainerOpen(char *testFileName, IOR_param_t * param,
     rc = iod_container_open(cname, con_open_hint, 
         mode, &(istate->coh), NULL);
     IOD_Barrier(istate);
-    add_timer("Container open");
+    add_timer("iod_container_open");
     IDEBUG(istate->myrank, "Done open container %s with %d ranks: %d", 
                             testFileName, istate->nranks, rc );
     return rc;
@@ -525,7 +525,7 @@ static void *IOD_Open(char *testFileName, IOR_param_t * param)
         rc = SkipTidZero(istate,testFileName);
         DCHECK(rc, "%s:%d", __FILE__, __LINE__);
         IOD_Barrier(istate);
-        add_timer("skip tid0");
+        add_timer("iod_skip_tid0");
 
         rc = open_wr(istate, testFileName, param);
         DCHECK(rc, "%s:%d", __FILE__, __LINE__);
