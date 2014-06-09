@@ -194,7 +194,7 @@ static void add_timer(char *op) {
 static void add_bandwidth(char *op, IOR_offset_t len) {
     snprintf(&(istate->times[strlen(istate->times)]),
         TIME_MSG_LEN - strlen(istate->times), 
-        "\tIOD %s_time = %.4f Bandwidth MB/s = %.2f\n", 
+        "\tIOD %s_time = %.4f bandwidth MB/s = %.2f\n", 
         op, MPI_Wtime() - istate->timer,
         (len / 1048576) / (MPI_Wtime() - istate->timer));
 
@@ -639,7 +639,7 @@ static void IOD_Close(void *fd, IOR_param_t * param)
     if (param->open == WRITE && param->persist_daos) {
         start_timer();
         iod_persist(s);
-        add_bandwidth("Persist", param->expectedAggFileSize);
+        add_bandwidth("iod_persist", param->expectedAggFileSize);
     }
 
     return; 
