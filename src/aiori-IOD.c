@@ -524,8 +524,8 @@ static void *IOD_Open(char *testFileName, IOR_param_t * param)
         start_timer();
         rc = SkipTidZero(istate,testFileName);
         DCHECK(rc, "%s:%d", __FILE__, __LINE__);
-        IOD_Barrier(istate);
         add_timer("iod_skip_tid0");
+        IOD_Barrier(istate);
 
         rc = open_wr(istate, testFileName, param);
         DCHECK(rc, "%s:%d", __FILE__, __LINE__);
