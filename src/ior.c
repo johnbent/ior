@@ -699,8 +699,15 @@ static void DisplayFreespace(IOR_param_t * test)
  */
 static int ApiNeedsThreads(int argc, char **argv) {
     int i;
+
+    /* the exascale hdf5 module needs threaded sometimes */
+    char *coresident_s = NULL;
+    coresident_s = getenv ("H5ENV_CORESIDENT");
+    if(NULL != coresident_s) return atoi(coresident_s);
+
     for (i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-a") == 0) {
+            /* the IOD module needs threads */
             return (!strcmp(argv[i+1],"IOD"));
         }
     }
