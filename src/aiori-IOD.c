@@ -91,7 +91,8 @@ ior_aiori_t iod_aiori = {
 };
 
 typedef struct iod_parameters_s {
-	int checksum;
+    int checksum;
+    char *iod_type;
 } iod_parameters_t;
 
 #define TIME_MSG_LEN 8192
@@ -103,6 +104,9 @@ typedef struct iod_state_s {
 	iod_obj_type_t otype;
 	iod_parameters_t params;
 	iod_blob_iodesc_t *io_desc;
+        iod_kv_t kv;
+        iod_array_struct_t *array;
+        iod_hyperslab_t *slab;
 	iod_mem_desc_t *mem_desc;
 	iod_checksum_t *cksum;
 	MPI_Comm mcom;
@@ -113,6 +117,9 @@ typedef struct iod_state_s {
 } iod_state_t;
 
 static iod_state_t *istate = NULL; 
+
+#define WRITE_MODE 1
+#define READ_MODE 0
 
 /***************************** F U N C T I O N S ******************************/
 
@@ -205,204 +212,6 @@ static void IOD_Barrier(iod_state_t *s) {
     MPI_Barrier(s->mcom);
 }
 
-int
-setup_blob_io(size_t len, off_t off, char *buf, iod_state_t *s, int rw) { 
-
-	/* where is the IO directed in the object */
-	s->io_desc->nfrag = 1;
-	s->io_desc->frag[0].len = len;
-	s->io_desc->frag[0].offset = off;
-	
-	/* from whence does the IO come in memory */
-	s->mem_desc->nfrag = 1;
-	s->mem_desc->frag[0].addr = (void*)buf;
-	s->mem_desc->frag[0].len = len;
-
-	/* setup the checksum */
-	if (s->params.checksum) {
-		if (rw==WRITE) {
-			plfs_error_t pret;
-			pret  = plfs_get_checksum(buf,len,(Plfs_checksum*)s->cksum);
-			IOD_RETURN_ON_ERROR("plfs_get_checksum", pret);
-		} else {
-			memset(s->cksum,0,sizeof(*(s->cksum)));
-		}
-	}
-}
-
-// returns zero on success and number of bytes transferred in bytes
-int 
-iod_write(iod_state_t *I,char *buf,size_t len,off_t off,ssize_t *bytes) {
-	iod_ret_t ret;
-	iod_hint_list_t *hints = NULL;
-	iod_event_t *event = NULL;
-
-	setup_blob_io(len,off,buf,I,WRITE);
-	ret =iod_blob_write(I->oh,I->tid,hints,I->mem_desc,I->io_desc,I->cksum,event);
-	IOD_RETURN_ON_ERROR("iod_blob_write",ret); // successful write returns zero
-	*bytes = len;
-
-	return ret;
-}
-
-int 
-iod_read(iod_state_t *s, char *buf,size_t len,off_t off,ssize_t *bytes) {
-	iod_hint_list_t *hints = NULL;
-	iod_event_t *event = NULL;
-	iod_ret_t ret = 0;
-
-	setup_blob_io(len,off,buf,s,READ);
-	ret=iod_blob_read(s->oh,s->tid,hints,s->mem_desc,s->io_desc,s->cksum,event);
-	if ( ret == 0 ) { // current semantic is 0 for success
-		*bytes = len;
-	} else {
-		IOD_PRINT_ERR("iod_blob_read",ret);
-	}
-	
-	if (s->params.checksum) {
-		plfs_error_t pret = 0;
-		pret = plfs_checksum_match(buf,len,(Plfs_checksum)(*s->cksum));
-		IOD_RETURN_ON_ERROR("plfs_checksum_match", pret);
-	}
-	return ret; 
-}
-
-static int
-create_obj(iod_handle_t coh, iod_trans_id_t tid, iod_obj_id_t *oid, iod_obj_type_t type, 
-		iod_array_struct_t *structure, iod_hint_list_t *hints, int rank) 
-{
-        IDEBUG(rank, "Creating obj type %d %lli", type, *oid);
-	int ret = iod_obj_create(coh, tid, hints, type, NULL, 
-			structure, oid, NULL);
-	IOD_RETURN_ON_ERROR("iod_obj_create",ret);
-	return ret;
-}
-
-int
-set_checksum(iod_hint_list_t **hints, int checksum) {
-	if (checksum) {
-		*hints = (iod_hint_list_t *)malloc(sizeof(iod_hint_list_t) + sizeof(iod_hint_t));
-		assert(*hints);
-		(*hints)->num_hint = 1;
-		(*hints)->hint[0].key = "iod_hint_obj_enable_cksum";
-	}
-	return 0;
-}
-
-int
-open_rd(iod_state_t *s, char *filename, IOR_param_t *param) {
-	iod_ret_t ret = 0;
-
-	/* start the read trans */
-	if (s->myrank == 0) {
-		ret=iod_trans_start(s->coh, &(s->tid),NULL,0,IOD_TRANS_R,NULL);
-		IOD_RETURN_ON_ERROR("iod_obj_open_read", ret);
-	}
-	IOD_Barrier(s);
-
-        start_timer();
-	ret = iod_obj_open_read(s->coh, s->oid, s->tid, NULL, &(s->oh), NULL);
-        add_timer("iod_obj_open_read");
-	IOD_RETURN_ON_ERROR("iod_obj_open_read", ret);
-	return ret;
-}
-
-int
-open_wr(iod_state_t *I, char *filename, IOR_param_t *param) {
-	iod_parameters_t *P = &(I->params);
-	int ret = 0;
-
-	/* start the write trans */
-	I->tid++; // bump up the tid
-	if (I->myrank == 0) {
-		ret = iod_trans_start(I->coh, &(I->tid), NULL, 0, IOD_TRANS_W, NULL);
-		IOD_RETURN_ON_ERROR("iod_trans_start", ret);
-		IDEBUG(I->myrank, "iod_trans_start %d : success", I->tid );
-	}
-        start_timer();
-        IOD_Barrier(I);
-
-	/* create the obj */
-	/* for shared file, only rank 0 does create then a barrier */
-	/* or does create, most fail with EEXIST, no barrier */
-	I->otype = IOD_OBJ_BLOB;
-        if (param->filePerProc == TRUE) {
-            I->oid = I->myrank;
-        } else {
-            I->oid = 0;
-        }
-	IOD_OBJID_SETOWNER_APP(I->oid)
-	IOD_OBJID_SETTYPE(I->oid, IOD_OBJ_BLOB);
-	if( !I->myrank || param->filePerProc == TRUE ) {
-		iod_hint_list_t *hints = NULL;
-		set_checksum(&hints,P->checksum);
-		ret = create_obj(I->coh, I->tid, &(I->oid), I->otype, NULL, hints, 
-                                I->myrank);
-		if (hints) free(hints);
-		if ( ret != 0 ) {
-			return ret;
-		} else {
-			IDEBUG(I->myrank,"iod obj %lli created successfully.",I->oid);
-		}
-	}
-	IOD_Barrier(I);
-        add_timer("iod_obj_create");
-
-	/* now open the obj */
-        start_timer();
-	ret = iod_obj_open_write(I->coh, I->oid, I->tid, NULL, &(I->oh), NULL);
-	IOD_RETURN_ON_ERROR("iod_obj_open_write", ret);
-        add_timer("iod_obj_open_write");
-	return ret;	
-}
-
-static iod_state_t * Init(IOR_param_t *param)
-{
-    int rc;
-
-    switch(param->verbose) {
-    case 0: verbosity_level = DEBUG_NONE; break; 
-    case 1: verbosity_level = DEBUG_ZERO; break;
-    case 2: verbosity_level = DEBUG_ALL; break;
-    default: verbosity_level = DEBUG_EVERY; break;
-    } 
-
-    istate = malloc(sizeof(iod_state_t));
-    memset(istate, 0, sizeof(*istate));
-    DCHECK(istate==NULL?-1:0,"malloc failed");
-
-    istate->mcom = param->testComm;
-    MPI_Comm_rank(istate->mcom, &(istate->myrank));
-    MPI_Comm_size(istate->mcom, &(istate->nranks));
-    start_timer();
-    IDEBUG(rank,"About to init");
-    rc = iod_initialize(istate->mcom, NULL, istate->nranks, istate->nranks);
-    IDEBUG(rank,"Done with init");
-    add_timer("iod_initialize");
-    DCHECK(rc, "%s:%d", __FILE__, __LINE__);
-    if (rc != 0) {
-        free(istate);
-        return NULL;
-    }
-
-    /* setup the io and memory descriptors used for blob io */
-    istate->mem_desc = 
-            malloc(sizeof(iod_mem_desc_t) + sizeof(iod_mem_frag_t));
-    istate->io_desc = 
-            malloc(sizeof(iod_blob_iodesc_t) + sizeof(iod_blob_iofrag_t));
-    assert(istate->mem_desc && istate->io_desc);
-
-    /* setup the checksum used for blob */
-    if (istate->params.checksum) {
-        istate->cksum = malloc(sizeof(iod_checksum_t));
-        assert(istate->cksum);
-    } else {
-        istate->cksum = NULL;
-    }
-
-    return istate;
-}
-
 static char *iod_cname( char *path, IOR_param_t *param ) {
     static char *cname = NULL;
 
@@ -418,14 +227,6 @@ static char *iod_cname( char *path, IOR_param_t *param ) {
     cname = basename(path);
     if (!cname) cname = path;
     return cname;
-}
-
-/*
- * Creat and open a file through the IOD interface.
- */
-static void *IOD_Create(char *testFileName, IOR_param_t * param)
-{
-    return IOD_Open(testFileName, param);
 }
 
 static int ContainerOpen(char *testFileName, IOR_param_t * param, 
@@ -459,6 +260,311 @@ static int ContainerOpen(char *testFileName, IOR_param_t * param,
     return rc;
 }
 
+void
+setup_mem_desc(iod_state_t *s, char *buf, off_t len) {
+    /* from whence does the IO come in memory */
+    s->mem_desc->nfrag = 1;
+    s->mem_desc->frag[0].addr = (void*)buf;
+    s->mem_desc->frag[0].len = len;
+}
+
+void
+setup_blob_io(size_t len, off_t off, char *buf, iod_state_t *s) { 
+	/* where is the IO directed in the object */
+	s->io_desc->nfrag = 1;
+	s->io_desc->frag[0].len = len;
+	s->io_desc->frag[0].offset = off;
+        
+        setup_mem_desc(s, buf, len);
+}
+
+void
+setup_kv_io(size_t len, off_t *off, char *buf, iod_state_t *s) {
+    s->kv.key = (void *)off;
+    s->kv.key_len = (iod_size_t)sizeof(*off);
+    s->kv.value = (void*)buf;
+    s->kv.value_len = (iod_size_t)len;
+}
+
+int
+setup_array(iod_state_t *I, size_t io_size, size_t last_cell) {
+    IDEBUG(I->myrank, "Setting up array");
+    int num_dims = 1;   /* 1D for now */
+    /* make the array structure */
+    I->array = (iod_array_struct_t *)malloc(sizeof(iod_array_struct_t));
+    assert(I->array);
+    I->array->cell_size = io_size;
+    I->array->num_dims = num_dims; 
+    I->array->firstdim_max    = IOD_DIMLEN_UNLIMITED;
+    I->array->chunk_dims = NULL;
+    I->array->current_dims = (iod_size_t*)malloc(sizeof(iod_size_t) * num_dims);
+    assert(I->array->current_dims);
+    
+    I->array->current_dims[0] = last_cell;
+    IDEBUG(I->myrank, "Current dim is %ld", I->array->current_dims[0]);
+
+    /* make the hyperslab structure */
+    I->slab = (iod_hyperslab_t*)malloc(sizeof(iod_hyperslab_t));
+    I->slab->start  = (iod_size_t*)malloc(sizeof(iod_size_t)*num_dims);
+    I->slab->count  = (iod_size_t*)malloc(sizeof(iod_size_t)*num_dims);
+    I->slab->stride = (iod_size_t*)malloc(sizeof(iod_size_t)*num_dims);
+    I->slab->block  = (iod_size_t*)malloc(sizeof(iod_size_t)*num_dims);
+}
+
+int
+teardown_array(iod_state_t *I) {
+    if (I->array) {
+        free(I->array->current_dims);
+        free(I->array);
+    }
+    if (I->slab) {
+        free(I->slab->start);
+        free(I->slab->count);
+        free(I->slab->stride);
+        free(I->slab->block);
+        free(I->slab);
+    }
+}
+
+void
+setup_array_io(size_t len, off_t off, char *buf, iod_state_t *s) { 
+    size_t which_cell = off / len;
+    //IDEBUG(s->myrank,"Off %ld is cell %ld when cellsize is %ld",off,which_cell,len);
+    s->slab->start[0]  = which_cell;
+    s->slab->count[0]  = 1;
+    s->slab->stride[0] = 1;
+    s->slab->block[0]  = 1;
+    setup_mem_desc(s, buf, len);
+}
+
+int
+iod_num_cksums(iod_obj_type_t otype) {
+    /* KV objs use 2 checksums per IO whereas blob/array only one */
+    return (otype == IOD_OBJ_KV ? 2 : 1);
+}
+
+int
+setup_cksum(iod_state_t *s, char *buf, size_t len, int rw, off_t off) {
+    int ncksums = iod_num_cksums(s->otype);
+
+    /* setup the checksum */
+    if (s->params.checksum) {
+        if (rw==WRITE_MODE) {
+            plfs_error_t pret;
+            switch(s->otype) {
+            case IOD_OBJ_BLOB:
+            case IOD_OBJ_ARRAY:
+                pret  = plfs_get_checksum(buf,len,(Plfs_checksum*)s->cksum);
+                IOD_RETURN_ON_ERROR("plfs_get_checksum", pret);
+                break;
+            case IOD_OBJ_KV:
+                pret  = plfs_get_checksum((char*)&off,sizeof(off_t),
+                    (Plfs_checksum*)&(s->cksum[0]));
+                IOD_RETURN_ON_ERROR("plfs_get_checksum", pret);
+                pret  = plfs_get_checksum(buf,len,(Plfs_checksum*)&(s->cksum[1]));
+                IOD_RETURN_ON_ERROR("plfs_get_checksum", pret);
+                break;
+            default:
+                assert(0);
+                break;
+            }
+        } else {
+                memset(s->cksum,0,sizeof(iod_checksum_t) * ncksums);
+        }
+    }
+    return 0;
+}
+
+// returns zero on success and number of bytes transferred in bytes
+int 
+iod_write(iod_state_t *I,char *buf,size_t len,off_t off,ssize_t *bytes) {
+	iod_ret_t ret;
+	iod_hint_list_t *hints = NULL;
+	iod_event_t *event = NULL;
+        //iod_checksum_t cs[2];
+        //cs[0] = cs[1] = NULL;
+
+        ret = setup_cksum(I, buf, len, WRITE_MODE, off);
+        IOD_RETURN_ON_ERROR("setup_cksum",ret); 
+
+        switch(I->otype) {
+        case IOD_OBJ_BLOB:
+            setup_blob_io(len,off,buf,I);
+            ret =iod_blob_write(I->oh,I->tid,hints,I->mem_desc,I->io_desc,I->cksum,event);
+            IOD_RETURN_ON_ERROR("iod_blob_write",ret); // successful write returns zero
+            *bytes = len;
+            break;
+        case IOD_OBJ_KV:
+            setup_kv_io(len,&off,buf,I);
+            ret = iod_kv_set(I->oh,I->tid,hints,&(I->kv),I->cksum,event);
+            IOD_RETURN_ON_ERROR("iod_kv_set",ret); // successful write returns zero
+            *bytes = len;
+            break;
+        case IOD_OBJ_ARRAY:
+            setup_array_io(len,off,buf,I);
+            ret = iod_array_write(I->oh,I->tid,hints,I->mem_desc,I->slab,I->cksum,event);
+            IOD_RETURN_ON_ERROR("iod_array_write",ret); // successful write returns zero
+            *bytes = len;
+            break;
+        default:
+            assert(0);
+            break;
+        }
+
+	return ret;
+}
+
+int 
+iod_read(iod_state_t *s, char *buf,size_t len,off_t off,ssize_t *bytes) {
+    iod_hint_list_t *hints = NULL;
+    iod_event_t *event = NULL;
+    iod_ret_t ret = 0;
+
+    ret = setup_cksum(s, buf, len, READ_MODE, off);
+    IOD_RETURN_ON_ERROR("setup_cksum",ret); 
+
+    switch(s->otype) {
+    case IOD_OBJ_ARRAY:
+        setup_array_io(len,off,buf,s);
+        ret = iod_array_read(s->oh,s->tid,hints,s->mem_desc,s->slab,s->cksum,event);
+        IOD_RETURN_ON_ERROR("iod_array_read",ret); // successful read returns zero
+        *bytes = len;
+        break;
+    case IOD_OBJ_BLOB:
+        setup_blob_io(len,off,buf,s);
+        ret=iod_blob_read(s->oh,s->tid,hints,s->mem_desc,s->io_desc,s->cksum,event);
+        IOD_RETURN_ON_ERROR("iod_blob_read",ret); // successful read returns zero
+        *bytes = len;
+        break;
+    case IOD_OBJ_KV:
+        setup_kv_io(len,&off,buf,s);
+        ret = iod_kv_get_value(s->oh, s->tid, s->kv.key, s->kv.key_len, 
+                s->kv.value, &(s->kv.value_len), s->cksum, event);
+        IOD_RETURN_ON_ERROR("iod_kv_get",ret); // successful write returns zero
+        *bytes = len;
+        break;
+    default:
+        assert(0);
+        break;
+    }
+
+    if (s->params.checksum) {
+        plfs_error_t pret = 0;
+        if (s->otype == IOD_OBJ_KV) {
+            pret = plfs_checksum_match((char*)&off,sizeof(off_t),
+                                (Plfs_checksum)(*(&(s->cksum[0]))));
+            IOD_RETURN_ON_ERROR("plfs_checksum_match", pret);
+            pret = plfs_checksum_match(buf,len,
+                                (Plfs_checksum)(*(&(s->cksum[1]))));
+            IOD_RETURN_ON_ERROR("plfs_checksum_match", pret);
+        } else {
+            pret = plfs_checksum_match(buf,len,(Plfs_checksum)(*s->cksum));
+            IOD_RETURN_ON_ERROR("plfs_checksum_match", pret);
+        }
+    }
+
+    return ret; 
+}
+
+static int
+create_obj(iod_handle_t coh, iod_trans_id_t tid, iod_obj_id_t *oid, iod_obj_type_t type, 
+		iod_array_struct_t *structure, iod_hint_list_t *hints, int rank) 
+{
+        IDEBUG(rank, "Creating obj type %d %lli", type, *oid);
+	int ret = iod_obj_create(coh, tid, hints, type, NULL, 
+			structure, oid, NULL);
+	IOD_RETURN_ON_ERROR("iod_obj_create",ret);
+	return ret;
+}
+
+int
+set_checksum(iod_hint_list_t **hints, int checksum) {
+	if (checksum) {
+		*hints = (iod_hint_list_t *)malloc(sizeof(iod_hint_list_t) + sizeof(iod_hint_t));
+		assert(*hints);
+		(*hints)->num_hint = 1;
+		(*hints)->hint[0].key = "iod_hint_obj_enable_cksum";
+	}
+	return 0;
+}
+
+int
+open_rd(iod_state_t *s, char *filename, IOR_param_t *param) {
+	iod_ret_t ret = 0;
+
+	/* start the read trans */
+	if (s->myrank == 0) {
+                start_timer();
+		ret=iod_trans_start(s->coh, &(s->tid),NULL,0,IOD_TRANS_R,NULL);
+                add_timer("iod_start_trans_read");
+		IOD_RETURN_ON_ERROR("iod_obj_open_read", ret);
+	}
+	IOD_Barrier(s);
+
+        start_timer();
+	ret = iod_obj_open_read(s->coh, s->oid, s->tid, NULL, &(s->oh), NULL);
+        add_timer("iod_obj_open_read");
+	IOD_RETURN_ON_ERROR("iod_obj_open_read", ret);
+	return ret;
+}
+
+int
+iod_set_otype( iod_state_t *s, const char *type ) {
+    if (type == NULL) {
+        s->otype = IOD_OBJ_BLOB; 
+    } else if (strcmp(type,"blob")==0) {
+        s->otype = IOD_OBJ_BLOB;
+    } else if (strcmp(type,"kv")==0) {
+        s->otype = IOD_OBJ_KV;
+    } else {
+        assert(strcmp(type,"array")==0);
+        s->otype = IOD_OBJ_ARRAY;
+    }
+    IDEBUG(s->myrank, "OBJ Type is %s", type);
+}
+
+int
+open_wr(iod_state_t *I, char *filename, IOR_param_t *param) {
+	iod_parameters_t *P = &(I->params);
+	int ret = 0;
+
+	/* start the write trans */
+	I->tid++; // bump up the tid
+	if (I->myrank == 0) {
+		ret = iod_trans_start(I->coh, &(I->tid), NULL, 0, IOD_TRANS_W, NULL);
+		IDEBUG(I->myrank, "iod_trans_start %d : %d", I->tid, ret );
+		IOD_RETURN_ON_ERROR("iod_trans_start", ret);
+	}
+        start_timer();
+        IOD_Barrier(I);
+
+	/* create the obj */
+	/* for shared file, only rank 0 does create then a barrier */
+	/* or does create, most fail with EEXIST, no barrier */
+
+	if( !I->myrank || param->filePerProc == TRUE ) {
+		iod_hint_list_t *hints = NULL;
+		set_checksum(&hints,P->checksum);
+		ret = create_obj(I->coh, I->tid, &(I->oid), I->otype, I->array, hints, 
+                                I->myrank);
+		if (hints) free(hints);
+		if ( ret != 0 ) {
+			return ret;
+		} else {
+			IDEBUG(I->myrank,"iod obj %lli created successfully.",I->oid);
+		}
+	}
+	IOD_Barrier(I);
+        add_timer("iod_obj_create");
+
+	/* now open the obj */
+        start_timer();
+	ret = iod_obj_open_write(I->coh, I->oid, I->tid, NULL, &(I->oh), NULL);
+	IOD_RETURN_ON_ERROR("iod_obj_open_write", ret);
+        add_timer("iod_obj_open_write");
+	return ret;	
+}
+
 static int SkipTidZero(iod_state_t *s, const char *target) {
     int rc = 0;
     if (!s->myrank) { 
@@ -475,15 +581,105 @@ static int SkipTidZero(iod_state_t *s, const char *target) {
     return rc;
 }
 
-static int IOD_Init(char *filename, IOR_param_t *param) {
+static iod_state_t * Init(IOR_param_t *param)
+{
     int rc;
-    Init(param);
 
+    switch(param->verbose) {
+    case 0: verbosity_level = DEBUG_NONE; break; 
+    case 1: verbosity_level = DEBUG_ZERO; break;
+    case 2: verbosity_level = DEBUG_ALL; break;
+    default: verbosity_level = DEBUG_EVERY; break;
+    } 
+
+    istate = malloc(sizeof(iod_state_t));
+    memset(istate, 0, sizeof(*istate));
+    DCHECK(istate==NULL?-1:0,"malloc failed");
+
+    istate->mcom = param->testComm;
+    MPI_Comm_rank(istate->mcom, &(istate->myrank));
+    MPI_Comm_size(istate->mcom, &(istate->nranks));
+    start_timer();
+    IDEBUG(rank,"About to init");
+    rc = iod_initialize(istate->mcom, NULL, istate->nranks, istate->nranks);
+    IDEBUG(rank,"Done with init");
+    add_timer("iod_initialize");
+    DCHECK(rc, "%s:%d", __FILE__, __LINE__);
+    if (rc != 0) {
+        free(istate);
+        return NULL;
+    }
+
+    // set the oid now here.
+    iod_set_otype(istate,param->iod_type);
+    if (param->filePerProc == TRUE) {
+        istate->oid = istate->myrank;
+    } else {
+        istate->oid = 0;
+    }
+    IOD_OBJID_SETOWNER_APP(istate->oid)
+    IOD_OBJID_SETTYPE(istate->oid, istate->otype);
+
+    /* setup the io and memory descriptors used for blob io */
+    istate->mem_desc = 
+            malloc(sizeof(iod_mem_desc_t) + sizeof(iod_mem_frag_t));
+    istate->io_desc = 
+            malloc(sizeof(iod_blob_iodesc_t) + sizeof(iod_blob_iofrag_t));
+    assert(istate->mem_desc && istate->io_desc);
+
+    /* setup the checksums */ 
+    if (istate->params.checksum) {
+        IDEBUG(istate->myrank, "Using checksums");
+            istate->cksum = malloc(sizeof(iod_checksum_t) * iod_num_cksums(istate->otype));
+            assert(istate->cksum);
+    } else {
+        IDEBUG(istate->myrank, "Not using checksums");
+            istate->cksum = NULL;
+    }
+
+    /* setup the array */
+    if (istate->otype == IOD_OBJ_ARRAY) {
+        size_t cell_size, total_sz, last_cell;
+        cell_size = param->transferSize; 
+        total_sz = param->expectedAggFileSize; 
+        last_cell = (total_sz / cell_size);
+        setup_array(istate, cell_size, last_cell);
+    } else {
+        istate->array = NULL;
+    }
+
+    if (istate->otype == IOD_OBJ_KV && param->transferSize > IOD_KV_VALUE_MAXLEN) {
+        assert(param->transferSize <= IOD_KV_VALUE_MAXLEN);
+        return NULL; //return EFBIG;
+    }
+
+    /* open the container */
     IOD_Barrier(istate);
-    rc = ContainerOpen(filename, param, istate);
+    rc = ContainerOpen(param->testFileName, param, istate);
     DCHECK(rc, "%s:%d", __FILE__, __LINE__);
     IOD_Barrier(istate);
 
+    /* skip tid 0 */
+    start_timer();
+    rc = SkipTidZero(istate,param->testFileName);
+    DCHECK(rc, "%s:%d", __FILE__, __LINE__);
+    add_timer("iod_skip_tid0");
+    IOD_Barrier(istate);
+
+    return istate;
+}
+
+/*
+ * Creat and open a file through the IOD interface.
+ */
+static void *IOD_Create(char *testFileName, IOR_param_t * param)
+{
+    return IOD_Open(testFileName, param);
+}
+
+static int IOD_Init(char *filename, IOR_param_t *param) {
+    int rc;
+    Init(param);
     return rc;
 } 
 
@@ -521,12 +717,6 @@ static void *IOD_Open(char *testFileName, IOR_param_t * param)
     //MPI_Comm_rank(param->testComm,&rank);
 
     if (param->open == WRITE) {
-        start_timer();
-        rc = SkipTidZero(istate,testFileName);
-        DCHECK(rc, "%s:%d", __FILE__, __LINE__);
-        add_timer("iod_skip_tid0");
-        IOD_Barrier(istate);
-
         rc = open_wr(istate, testFileName, param);
         DCHECK(rc, "%s:%d", __FILE__, __LINE__);
     } else {

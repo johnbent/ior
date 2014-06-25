@@ -292,6 +292,8 @@ void DecodeDirective(char *line, IOR_param_t *params)
                 params->daos_wait = atoi(value);
         } else if (strcasecmp(option, "daoswriteonly") == 0) {
                 params->daos_writeonly = atoi(value);
+        } else if (strcasecmp(option, "iodtype") == 0) {
+                params->iod_type = strdup(value);
         } else {
                 if (rank == 0)
                         fprintf(stdout, "Unrecognized parameter \"%s\"\n",

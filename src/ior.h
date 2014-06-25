@@ -144,6 +144,7 @@ typedef struct
 
     /* IOD variables */
     int persist_daos;               /* whether to persist at write close to daos */
+    char * iod_type;                   /* kv, blob, array */
     /* maybe later add a purge */
 } IOR_param_t;
 

@@ -208,6 +208,7 @@ void init_IOR_Param_t(IOR_param_t * p)
         p->daos_n_shards = -1;
         p->daos_n_targets = -1;
         p->daos_n_aios = 1;
+        p->iod_type = "blob"; 
 }
 
 /*
@@ -1516,9 +1517,12 @@ static void ShowSetup(IOR_param_t *params)
                 printf(params->collective == FALSE ? ", independent" : ", collective");
         }
         printf("\n");
-        if (strcmp(params->api, "IOD") == 0) {
+        if (strcmp(params->api, "IOD") == 0 || strcmp(params->api, "HDF5") == 0) {
             printf("\tdaos persist       = %s\n", 
-                params->persist_daos ? "TRUE" : "FALSE");
+            params->persist_daos ? "TRUE" : "FALSE");
+            if (strcmp(params->api, "IOD") == 0) {
+                printf("\tiod type           = %s\n", params->iod_type);
+            }
         }
         if (verbose >= VERBOSE_1) {
                 if (params->segmentCount > 1) {
@@ -1635,6 +1639,7 @@ static void ShowTest(IOR_param_t * test)
         fprintf(stdout, "\t%s=%lld\n", "setAlignment", test->setAlignment);
         fprintf(stdout, "\t%s=%d\n", "storeFileOffset", test->storeFileOffset);
         fprintf(stdout, "\t%s=%d\n", "persistToDAOS", test->persist_daos);
+        fprintf(stdout, "\t%s=%s\n", "iodObjectType", test->iod_type);
         fprintf(stdout, "\t%s=%d\n", "useSharedFilePointer",
                 test->useSharedFilePointer);
         fprintf(stdout, "\t%s=%d\n", "useO_DIRECT", test->useO_DIRECT);
