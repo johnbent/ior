@@ -236,7 +236,6 @@ static void *HDF5_Open(char *testFileName, IOR_param_t * param)
 
                 /* create transaction object */
                 tid = H5TRcreate(*fd, rid, (uint64_t)2);
-
                 trspl_id = H5Pcreate (H5P_TR_START);
                 H5Pset_trspl_num_peers(trspl_id, my_size);
                 H5TRstart(tid, trspl_id, H5_EVENT_STACK_NULL);
@@ -292,6 +291,9 @@ static void *HDF5_Open(char *testFileName, IOR_param_t * param)
         dataSpace = H5Screate_simple(NUM_DIMS, dataSetDims, NULL);
         HDF5_CHECK(dataSpace, "cannot create simple data space");
 
+        /* create new data set */
+        SetupDataSet(fd, param);
+
         return (fd);
 }
 
@@ -328,6 +330,8 @@ static IOR_offset_t HDF5_Xfer(int access, void *fd, IOR_size_t * buffer,
                 segmentSize =
                     (IOR_offset_t) (param->numTasks) * param->blockSize;
         }
+
+#if 0
         if ((IOR_offset_t) ((param->offset - segmentPosition) % segmentSize) ==
             0) {
                 /*
@@ -340,6 +344,7 @@ static IOR_offset_t HDF5_Xfer(int access, void *fd, IOR_size_t * buffer,
                 }
         }
 
+
         /* create new data set */
         if (startNewDataSet == TRUE) {
                 /* if just opened this file, no data set to close yet */
@@ -350,6 +355,7 @@ static IOR_offset_t HDF5_Xfer(int access, void *fd, IOR_size_t * buffer,
                 }
                 SetupDataSet(fd, param);
         }
+#endif
 
         SeekOffset(fd, param->offset, param);
 
@@ -485,6 +491,7 @@ static IOR_offset_t SeekOffset(void *fd, IOR_offset_t offset,
         HDF5_CHECK(H5Sselect_hyperslab(fileDataSpace, H5S_SELECT_SET,
                                        hsStart, hsStride, hsCount, hsBlock),
                    "cannot select hyperslab");
+
         return (offset);
 }
 
@@ -516,19 +523,45 @@ static void SetupDataSet(void *fd, IOR_param_t * param)
                 dataSetSuffix++);
 
         if (param->open == WRITE) {     /* WRITE */
-                hid_t dcpl_id;
+                void *dset_token = NULL;
+                size_t token_size = 0;
+                herr_t ret;
 
-                dcpl_id = H5Pcreate( H5P_DATASET_CREATE );
-                H5Pset_ocpl_enable_checksum(dcpl_id, H5_CHECKSUM_NONE);
+                if(0 == rank) {
+                        hid_t dcpl_id;
+                        dcpl_id = H5Pcreate( H5P_DATASET_CREATE );
+                        H5Pset_ocpl_enable_checksum(dcpl_id, H5_CHECKSUM_NONE);
 
-                /* create data set */
-                dataSet = H5Dcreate_ff(*(hid_t *) fd, dataSetName, H5T_NATIVE_LLONG,
-                                       dataSpace, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT, 
-                                       tid, H5_EVENT_STACK_NULL);
-                HDF5_CHECK(dataSet, "cannot create data set");
+                        /* create data set */
+                        dataSet = H5Dcreate_ff(*(hid_t *) fd, dataSetName, H5T_NATIVE_LLONG,
+                                               dataSpace, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT, 
+                                               tid, H5_EVENT_STACK_NULL);
+                        HDF5_CHECK(dataSet, "cannot create data set");
 
-                H5Pclose(dcpl_id);
-        } else {                /* READ or CHECK */
+                        ret = H5Oget_token(dataSet, NULL, &token_size);
+                        assert(0 == ret);
+                        dset_token = malloc(token_size);
+                        ret = H5Oget_token(dataSet, dset_token, &token_size);
+                        assert(0 == ret);
+
+                        H5Pclose(dcpl_id);
+                }
+
+                MPI_Bcast(&token_size, sizeof(size_t), MPI_BYTE, 0, MPI_COMM_WORLD);
+
+                if(0 != rank) {
+                        dset_token = malloc(token_size);
+                }
+
+                MPI_Bcast(dset_token, token_size, MPI_BYTE, 0, MPI_COMM_WORLD);
+
+                if(0 != rank) {
+                        dataSet = H5Oopen_by_token(dset_token, tid, H5_EVENT_STACK_NULL);
+                }
+
+                free(dset_token);
+        }
+        else {                /* READ or CHECK */
                 dataSet = H5Dopen_ff(*(hid_t *) fd, dataSetName, 
                                      H5P_DEFAULT, rid, H5_EVENT_STACK_NULL);
                 HDF5_CHECK(dataSet, "cannot create data set");
