@@ -418,7 +418,7 @@ static void HDF5_Close(void *fd, IOR_param_t * param)
 
         MPI_Barrier (MPI_COMM_WORLD);
 
-        if (param->open == WRITE && param->persist_daos)
+        if (param->open == WRITE && param->iod_persist)
                 HDF5_CHECK(H5Fclose_ff(*(hid_t *) fd, 1 , H5_EVENT_STACK_NULL), "cannot close file");
         else
                 HDF5_CHECK(H5Fclose_ff(*(hid_t *) fd, 0 , H5_EVENT_STACK_NULL), "cannot close file");

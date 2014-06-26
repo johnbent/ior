@@ -204,11 +204,14 @@ void init_IOR_Param_t(IOR_param_t * p)
         p->testComm = MPI_COMM_WORLD;
         p->setAlignment = 1;
         p->lustre_start_ost = -1;
-        p->persist_daos = 0;
         p->daos_n_shards = -1;
         p->daos_n_targets = -1;
         p->daos_n_aios = 1;
         p->iod_type = "blob"; 
+        p->iod_persist = 0;
+        p->iod_purge = 0;
+        p->iod_fetch = 0;
+        p->iod_checksum = 0;
 }
 
 /*
@@ -1498,6 +1501,10 @@ static void ShowTestInfo(IOR_param_t *params)
         fflush(stdout);
 }
 
+static char *TrueFalse(int v) {
+    return (v ? "TRUE" : "FALSE");
+}
+
 /*
  * Show simple test output with max results for iterations.
  */
@@ -1518,10 +1525,12 @@ static void ShowSetup(IOR_param_t *params)
         }
         printf("\n");
         if (strcmp(params->api, "IOD") == 0 || strcmp(params->api, "HDF5") == 0) {
-            printf("\tdaos persist       = %s\n", 
-            params->persist_daos ? "TRUE" : "FALSE");
+            printf("\tiod persist        = %s\n", TrueFalse(params->iod_persist));
             if (strcmp(params->api, "IOD") == 0) {
                 printf("\tiod type           = %s\n", params->iod_type);
+                printf("\tiod purge          = %s\n", TrueFalse(params->iod_purge));
+                printf("\tiod fetch          = %s\n", TrueFalse(params->iod_fetch));
+                printf("\tiod checksum       = %s\n", TrueFalse(params->iod_checksum)); 
             }
         }
         if (verbose >= VERBOSE_1) {
@@ -1638,8 +1647,13 @@ static void ShowTest(IOR_param_t * test)
         fprintf(stdout, "\t%s=%d\n", "useFileView", test->useFileView);
         fprintf(stdout, "\t%s=%lld\n", "setAlignment", test->setAlignment);
         fprintf(stdout, "\t%s=%d\n", "storeFileOffset", test->storeFileOffset);
-        fprintf(stdout, "\t%s=%d\n", "persistToDAOS", test->persist_daos);
-        fprintf(stdout, "\t%s=%s\n", "iodObjectType", test->iod_type);
+        if (strcmp(test->api,"IOD")==0) {
+            fprintf(stdout, "\t%s=%d\n", "iodPersistToDAOS", test->iod_persist);
+            fprintf(stdout, "\t%s=%s\n", "iodObjectType", test->iod_type);
+            fprintf(stdout, "\t%s=%d\n", "iodPurge", test->iod_purge);
+            fprintf(stdout, "\t%s=%d\n", "iodFetch", test->iod_fetch);
+            fprintf(stdout, "\t%s=%d\n", "iodChecksum", test->iod_checksum);
+        }
         fprintf(stdout, "\t%s=%d\n", "useSharedFilePointer",
                 test->useSharedFilePointer);
         fprintf(stdout, "\t%s=%d\n", "useO_DIRECT", test->useO_DIRECT);

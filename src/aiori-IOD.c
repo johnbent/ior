@@ -90,28 +90,25 @@ ior_aiori_t iod_aiori = {
     IOD_Fini
 };
 
-typedef struct iod_parameters_s {
-    int checksum;
-    char *iod_type;
-} iod_parameters_t;
-
 #define TIME_MSG_LEN 8192
 typedef struct iod_state_s {
 	iod_trans_id_t tid;
+	iod_trans_id_t tag; // if we fetch
 	iod_handle_t coh;
 	iod_handle_t oh;
         iod_obj_id_t oid; 
 	iod_obj_type_t otype;
-	iod_parameters_t params;
 	iod_blob_iodesc_t *io_desc;
         iod_kv_t kv;
         iod_array_struct_t *array;
         iod_hyperslab_t *slab;
 	iod_mem_desc_t *mem_desc;
 	iod_checksum_t *cksum;
+        int checksum; // are we doing checksums?
 	MPI_Comm mcom;
 	int myrank;
         int nranks;
+        int ssf; 
         char times[TIME_MSG_LEN];
         double timer;
 } iod_state_t;
@@ -348,7 +345,8 @@ setup_cksum(iod_state_t *s, char *buf, size_t len, int rw, off_t off) {
     int ncksums = iod_num_cksums(s->otype);
 
     /* setup the checksum */
-    if (s->params.checksum) {
+    if (s->checksum) {
+        IDEBUG(rank, "Setting up checksums\n");
         if (rw==WRITE_MODE) {
             plfs_error_t pret;
             switch(s->otype) {
@@ -426,19 +424,19 @@ iod_read(iod_state_t *s, char *buf,size_t len,off_t off,ssize_t *bytes) {
     switch(s->otype) {
     case IOD_OBJ_ARRAY:
         setup_array_io(len,off,buf,s);
-        ret = iod_array_read(s->oh,s->tid,hints,s->mem_desc,s->slab,s->cksum,event);
+        ret = iod_array_read(s->oh,s->tag,hints,s->mem_desc,s->slab,s->cksum,event);
         IOD_RETURN_ON_ERROR("iod_array_read",ret); // successful read returns zero
         *bytes = len;
         break;
     case IOD_OBJ_BLOB:
         setup_blob_io(len,off,buf,s);
-        ret=iod_blob_read(s->oh,s->tid,hints,s->mem_desc,s->io_desc,s->cksum,event);
+        ret=iod_blob_read(s->oh,s->tag,hints,s->mem_desc,s->io_desc,s->cksum,event);
         IOD_RETURN_ON_ERROR("iod_blob_read",ret); // successful read returns zero
         *bytes = len;
         break;
     case IOD_OBJ_KV:
         setup_kv_io(len,&off,buf,s);
-        ret = iod_kv_get_value(s->oh, s->tid, s->kv.key, s->kv.key_len, 
+        ret = iod_kv_get_value(s->oh, s->tag, s->kv.key, s->kv.key_len, 
                 s->kv.value, &(s->kv.value_len), s->cksum, event);
         IOD_RETURN_ON_ERROR("iod_kv_get",ret); // successful write returns zero
         *bytes = len;
@@ -448,7 +446,8 @@ iod_read(iod_state_t *s, char *buf,size_t len,off_t off,ssize_t *bytes) {
         break;
     }
 
-    if (s->params.checksum) {
+    if (s->checksum) {
+        IDEBUG(rank, "Verifying checksums\n");
         plfs_error_t pret = 0;
         if (s->otype == IOD_OBJ_KV) {
             pret = plfs_checksum_match((char*)&off,sizeof(off_t),
@@ -490,22 +489,41 @@ set_checksum(iod_hint_list_t **hints, int checksum) {
 
 int
 open_rd(iod_state_t *s, char *filename, IOR_param_t *param) {
-	iod_ret_t ret = 0;
+    iod_ret_t ret = 0;
 
-	/* start the read trans */
-	if (s->myrank == 0) {
-                start_timer();
-		ret=iod_trans_start(s->coh, &(s->tid),NULL,0,IOD_TRANS_R,NULL);
-                add_timer("iod_start_trans_read");
-		IOD_RETURN_ON_ERROR("iod_obj_open_read", ret);
-	}
-	IOD_Barrier(s);
-
+    /* start the read trans */
+    if (s->myrank == 0) {
         start_timer();
-	ret = iod_obj_open_read(s->coh, s->oid, s->tid, NULL, &(s->oh), NULL);
-        add_timer("iod_obj_open_read");
-	IOD_RETURN_ON_ERROR("iod_obj_open_read", ret);
-	return ret;
+        ret=iod_trans_start(s->coh, &(s->tid),NULL,0,IOD_TRANS_R,NULL);
+        add_timer("iod_start_trans_read");
+        IOD_RETURN_ON_ERROR("iod_obj_open_read", ret);
+    }
+    IOD_Barrier(s);
+
+    /* now open for read */
+    start_timer();
+    ret = iod_obj_open_read(s->coh, s->oid, s->tid, NULL, &(s->oh), NULL);
+    add_timer("iod_obj_open_read");
+    IOD_RETURN_ON_ERROR("iod_obj_open_read", ret);
+
+    /* do the fetch if requested */
+    s->tag = s->tid; // use tag for read, set to tid in case we don't fetch
+    if (param->open == READ && param->iod_fetch) {
+        IOD_Barrier(s);
+	if( !s->myrank || param->filePerProc == TRUE ) {
+            start_timer();
+            ret = iod_fetch(s);
+            add_bandwidth("iod_fetch", param->expectedAggFileSize);
+            IOD_DIE_ON_ERROR("iod_fetch",ret);
+        }
+        if (! param->filePerProc ) {
+            MPI_Bcast(&(s->tag), 1, MPI_UINT64_T, 0, s->mcom);
+        }
+        IOD_Barrier(s);
+    }
+
+
+    return ret;
 }
 
 int
@@ -525,7 +543,6 @@ iod_set_otype( iod_state_t *s, const char *type ) {
 
 int
 open_wr(iod_state_t *I, char *filename, IOR_param_t *param) {
-	iod_parameters_t *P = &(I->params);
 	int ret = 0;
 
 	/* start the write trans */
@@ -544,7 +561,7 @@ open_wr(iod_state_t *I, char *filename, IOR_param_t *param) {
 
 	if( !I->myrank || param->filePerProc == TRUE ) {
 		iod_hint_list_t *hints = NULL;
-		set_checksum(&hints,P->checksum);
+		set_checksum(&hints,I->checksum);
 		ret = create_obj(I->coh, I->tid, &(I->oid), I->otype, I->array, hints, 
                                 I->myrank);
 		if (hints) free(hints);
@@ -596,9 +613,12 @@ static iod_state_t * Init(IOR_param_t *param)
     memset(istate, 0, sizeof(*istate));
     DCHECK(istate==NULL?-1:0,"malloc failed");
 
+    /* get some initial stuff from the params */
     istate->mcom = param->testComm;
     MPI_Comm_rank(istate->mcom, &(istate->myrank));
     MPI_Comm_size(istate->mcom, &(istate->nranks));
+    istate->checksum = param->iod_checksum;
+
     start_timer();
     IDEBUG(rank,"About to init");
     rc = iod_initialize(istate->mcom, NULL, istate->nranks, istate->nranks);
@@ -628,13 +648,13 @@ static iod_state_t * Init(IOR_param_t *param)
     assert(istate->mem_desc && istate->io_desc);
 
     /* setup the checksums */ 
-    if (istate->params.checksum) {
+    if (istate->checksum) {
         IDEBUG(istate->myrank, "Using checksums");
-            istate->cksum = malloc(sizeof(iod_checksum_t) * iod_num_cksums(istate->otype));
-            assert(istate->cksum);
+        istate->cksum = malloc(sizeof(iod_checksum_t) * iod_num_cksums(istate->otype));
+        assert(istate->cksum);
     } else {
         IDEBUG(istate->myrank, "Not using checksums");
-            istate->cksum = NULL;
+        istate->cksum = NULL;
     }
 
     /* setup the array */
@@ -767,43 +787,83 @@ static void IOD_Fsync(void *fd, IOR_param_t * param)
         EWARN("fsync() failed");
 }
 
-/* this only close the object */
 int
-iod_close( iod_state_t *s) {
-	iod_ret_t ret;
+iod_close( iod_state_t *s,IOR_param_t * param) {
+    iod_ret_t ret;
 
-	/* close the object handle */
-	ret = iod_obj_close(s->oh, NULL, NULL);
-	IOD_RETURN_ON_ERROR("iod_obj_close",ret);
+    /* finish the transaction */
+    if (s->myrank == 0) {
+            ret = iod_trans_finish(s->coh, s->tid, NULL, 0, NULL);
+            IOD_RETURN_ON_ERROR("iod_trans_finish",ret);
+            IDEBUG(s->myrank,"iod_trans_finish %d: success", s->tid);
+    }
+    IOD_Barrier(s);
 
-	/* finish the transaction */
-	if (s->myrank == 0) {
-		ret = iod_trans_finish(s->coh, s->tid, NULL, 0, NULL);
-		IOD_RETURN_ON_ERROR("iod_trans_finish",ret);
-		IDEBUG(s->myrank,"iod_trans_finish %d: success", s->tid);
-	}
-	MPI_Barrier(s->mcom);
-	
-	return ret;
+    /* persist if requested */
+    if (param->open == WRITE && param->iod_persist) {
+        start_timer();
+        ret = iod_persist(s);
+        add_bandwidth("iod_persist", param->expectedAggFileSize);
+        IOD_DIE_ON_ERROR("iod_persist",ret);
+    }
+
+    /* purge if requested */
+    if (param->open == WRITE && param->iod_purge) {
+        if (!param->iod_persist) IOD_DIE_ON_ERROR("purge requires persist",-1);
+        assert(param->iod_persist);
+        IOD_Barrier(s);
+	if( !s->myrank || param->filePerProc == TRUE ) {
+            start_timer();
+            ret = iod_purge(s);
+            add_timer("iod_purge");
+            IOD_DIE_ON_ERROR("iod_purge",ret);
+        }
+        IOD_Barrier(s);
+    }
+
+    /* close the object handle */
+    ret = iod_obj_close(s->oh, NULL, NULL);
+    IOD_RETURN_ON_ERROR("iod_obj_close",ret);
+    
+    return ret;
+}
+
+/* caller must call this with all ranks if file_per_proc else only 0 */
+int
+iod_purge(iod_state_t *s) {
+    iod_ret_t ret = 0;
+    IDEBUG(s->myrank,"Purge on %lli @ %d", s->oid, s->tid);
+    ret = iod_obj_purge(s->oh,s->tid,NULL,NULL);
+    return ret;
+}
+
+/* caller must call this with all ranks if file_per_proc else only 0 */
+int
+iod_fetch(iod_state_t *s) {
+    /* XXX TODO: Do a good layout for read.  Especially if file per proc */
+    iod_ret_t ret = 0;
+    IDEBUG(s->myrank,"Fetch on %lli @ %d", s->oid, s->tid);
+    ret = iod_obj_fetch(s->oh,s->tid,NULL,NULL,NULL,&(s->tag),NULL);
+    return ret;
 }
 
 int
 iod_persist(iod_state_t *s) {
-	iod_ret_t ret = 0;
-	MPI_Barrier(s->mcom);
-	if (s->myrank == 0) {
-		ret = iod_trans_start(s->coh, &(s->tid), NULL, 0, IOD_TRANS_R, NULL);
-		IOD_RETURN_ON_ERROR("iod_trans_start", ret);
+    iod_ret_t ret = 0;
+    IOD_Barrier(s);
+    if (s->myrank == 0) {
+            ret = iod_trans_start(s->coh, &(s->tid), NULL, 0, IOD_TRANS_R, NULL);
+            IOD_RETURN_ON_ERROR("iod_trans_start", ret);
 
-		IDEBUG(s->myrank,"Persist on TR %d", s->tid);
-		ret = iod_trans_persist(s->coh, s->tid, NULL, NULL);
-		IOD_RETURN_ON_ERROR("iod_trans_persist", ret);
+            IDEBUG(s->myrank,"Persist on TR %d", s->tid);
+            ret = iod_trans_persist(s->coh, s->tid, NULL, NULL);
+            IOD_RETURN_ON_ERROR("iod_trans_persist", ret);
 
-		ret = iod_trans_finish(s->coh, s->tid, NULL, 0, NULL);
-		IOD_RETURN_ON_ERROR("iod_trans_finish", ret);
-	}
-	MPI_Barrier(s->mcom);
-	return ret;
+            ret = iod_trans_finish(s->coh, s->tid, NULL, 0, NULL);
+            IOD_RETURN_ON_ERROR("iod_trans_finish", ret);
+    }
+    IOD_Barrier(s);
+    return ret;
 }
 
 /*
@@ -819,18 +879,12 @@ static void IOD_Close(void *fd, IOR_param_t * param)
     start_timer();
     IOD_Barrier(s);
     IDEBUG(s->myrank,"About to close object");
-    ret = iod_close(s);
+    ret = iod_close(s,param);
     IOD_DIE_ON_ERROR("iod_object_close",ret);
     IDEBUG(s->myrank,"Closed object");
     IOD_Barrier(s);
     sprintf(func_name, "iod_obj_close_%s", param->open==WRITE?"write":"read");
     add_timer(func_name);
-
-    if (param->open == WRITE && param->persist_daos) {
-        start_timer();
-        iod_persist(s);
-        add_bandwidth("iod_persist", param->expectedAggFileSize);
-    }
 
     return; 
 }

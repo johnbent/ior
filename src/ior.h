@@ -143,9 +143,11 @@ typedef struct
     int intraTestBarriers;           /* barriers between open/op and op/close */
 
     /* IOD variables */
-    int persist_daos;               /* whether to persist at write close to daos */
-    char * iod_type;                   /* kv, blob, array */
-    /* maybe later add a purge */
+    int iod_persist;                   /* persist data after write close to daos */
+    char * iod_type;                   /* kv, blob, or array */
+    int iod_purge;                     /* evict data from bb after write close */
+    int iod_checksum;                  /* protect and verify data with checksums */
+    int iod_fetch;                     /* fetch data from bb before read open */
 } IOR_param_t;
 
 /* each pointer is to an array, each of length equal to the number of

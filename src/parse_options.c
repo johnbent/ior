@@ -212,8 +212,6 @@ void DecodeDirective(char *line, IOR_param_t *params)
                 params->preallocate = atoi(value);
         } else if (strcasecmp(option, "storefileoffset") == 0) {
                 params->storeFileOffset = atoi(value);
-        } else if (strcasecmp(option, "persistdaos") == 0) {
-                params->persist_daos = atoi(value);
         } else if (strcasecmp(option, "usefileview") == 0) {
                 params->useFileView = atoi(value);
         } else if (strcasecmp(option, "usesharedfilepointer") == 0) {
@@ -294,6 +292,14 @@ void DecodeDirective(char *line, IOR_param_t *params)
                 params->daos_writeonly = atoi(value);
         } else if (strcasecmp(option, "iodtype") == 0) {
                 params->iod_type = strdup(value);
+        } else if (strcasecmp(option, "iodpersist") == 0) {
+                params->iod_persist = atoi(value); 
+        } else if (strcasecmp(option, "iodpurge") == 0) {
+                params->iod_purge = atoi(value); 
+        } else if (strcasecmp(option, "iodfetch") == 0) {
+                params->iod_fetch = atoi(value); 
+        } else if (strcasecmp(option, "iodchecksum") == 0) {
+                params->iod_checksum = atoi(value); 
         } else {
                 if (rank == 0)
                         fprintf(stdout, "Unrecognized parameter \"%s\"\n",
@@ -519,7 +525,7 @@ IOR_test_t *ParseCommandLine(int argc, char **argv)
                         initialTestParams.storeFileOffset = TRUE;
                         break;
                 case 'L':
-                        initialTestParams.persist_daos = TRUE;
+                        initialTestParams.iod_persist = TRUE;
                         break;
 		case 'M':
                         initialTestParams.memoryPerNode =

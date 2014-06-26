@@ -47,6 +47,8 @@ static void DAOS_Delete(char *, IOR_param_t *);
 static void DAOS_SetVersion(IOR_param_t *);
 static void DAOS_Fsync(void *, IOR_param_t *);
 static IOR_offset_t DAOS_GetFileSize(IOR_param_t *, MPI_Comm, char *);
+static int DAOS_Fini(char *, IOR_param_t *);
+static int DAOS_Init(char *, IOR_param_t *);
 
 /************************** D E C L A R A T I O N S ***************************/
 
@@ -60,8 +62,8 @@ ior_aiori_t daos_aiori = {
         DAOS_SetVersion,
         DAOS_Fsync,
         DAOS_GetFileSize,
-        NULL,
-        NULL
+        DAOS_Init,
+        DAOS_Fini
 };
 
 struct fileDescriptor {
@@ -81,6 +83,7 @@ struct aio {
         unsigned char          *a_buffer;
 };
 
+#define TIME_MSG_LEN 8192
 static daos_handle_t       eventQueue;
 static struct daos_event **events;
 static unsigned char      *buffers;
@@ -88,20 +91,21 @@ static int                 nAios;
 static unsigned int       *targets;
 static int                 nTargets;
 static int                 initialized;
+static double              timer;
+static char                times[TIME_MSG_LEN]; 
 
 static CFS_LIST_HEAD(aios);
 
 /***************************** F U N C T I O N S ******************************/
 
+static void start_timer() {
+    timer = MPI_Wtime();
+}
 
-#define START_TIME(X) X = MPI_Wtime();
-#define PRINT_TIME(X,Y) \
-do { \
-  if (rank==0) { \
-    printf("DAOS TIME DEBUG: %s took %.2f seconds\n", Y, MPI_Wtime() - X); \
-  } \
-} while (0);
-
+static void add_timer(char *op) {
+    snprintf(&(times[strlen(times)]), TIME_MSG_LEN - strlen(times), 
+        "\tDAOS %s_time =  %.4f\n", op, MPI_Wtime() - timer);
+}
 
 #define DCHECK(rc, format, ...)                                         \
 do {                                                                    \
@@ -213,6 +217,7 @@ static void Init(void)
 
 	rc = daos_eq_create(&eventQueue);
         DCHECK(rc, "Failed to create event queue");
+
 }
 
 static void Fini(void)
@@ -225,6 +230,16 @@ static void Fini(void)
 #ifdef HAVE_DAOS_POSIX
         daos_posix_finalize();
 #endif
+}
+
+static int DAOS_Init(char *testFileName, IOR_param_t *p) {
+    times[0] = '\0';
+    return 0;
+}
+
+static int DAOS_Fini(char *testFileName, IOR_param_t *p) {
+    if (rank==0) printf("%s", times);
+    return 0;
 }
 
 static void shard_add(daos_handle_t container, daos_epoch_t epoch,
@@ -249,10 +264,10 @@ static void shard_add(daos_handle_t container, daos_epoch_t epoch,
                 t[i] = targets[i % param->daos_n_targets];
         }
 
-        START_TIME(ts);
+        start_timer();
         rc = daos_shard_add(container, epoch, param->daos_n_shards, t, s,
                             NULL /* synchronous */);
-        PRINT_TIME(ts,"daos_shard_add");
+        add_timer("daos_shard_add");
         DCHECK(rc, "Failed to create shards");
 
         free(t);
@@ -277,11 +292,11 @@ static void ContainerOpen(char *testFileName, IOR_param_t *param,
                 else
                         dMode = DAOS_COO_RO;
 
-                START_TIME(ts);
+                start_timer();
                 rc = daos_container_open(testFileName, dMode, param->numTasks,
                                          &status, container,
                                          NULL /* synchronous */);
-                PRINT_TIME(ts, "daos_container_open");
+                add_timer( "daos_container_open");
                 DCHECK(rc, "Failed to open container %s", testFileName);
                 if (status != DAOS_CONTAINER_ST_OK)
                         ERR("Container not okay");
@@ -312,14 +327,14 @@ static void ContainerOpen(char *testFileName, IOR_param_t *param,
                         daos_epoch_t e = {hce->seq + 1};
                         double ts;
 
-                        START_TIME(ts);
+                        start_timer();
                         shard_add(*container, e, param);
-                        PRINT_TIME(ts,"shard_add");
+                        add_timer("shard_add");
 
-                        START_TIME(ts);
+                        start_timer();
                         rc = daos_epoch_commit(*container, e, 1 /* sync */,
                                                NULL, NULL /* synchronous */);
-                        PRINT_TIME(ts,"daos_epoch_commit");
+                        add_timer("daos_epoch_commit");
                         DCHECK(rc, "Failed to commit shard creation");
 
                         *hce = e;
@@ -527,9 +542,9 @@ static void *DAOS_Open(char *testFileName, IOR_param_t *param)
          * If param->open is not WRITE, the container must be created by a
          * "symmetrical" write session first.
          */
-        START_TIME(ts); 
+        start_timer(); 
         ContainerOpen(testFileName, param, &fd->container, &fd->hce);
-        PRINT_TIME(ts,"ContainerOpen");
+        add_timer("ContainerOpen");
 
         if (param->open == WRITE) {
                 if (param->daos_epoch == 0)
@@ -697,11 +712,11 @@ static void DAOS_Close(void *file, IOR_param_t *param)
 
                 if (rank == 0) {
                         double ts;
-                        START_TIME(ts);
+                        start_timer();
                         rc = daos_epoch_commit(fd->container, fd->epoch,
                                                1 /* sync */, NULL,
                                                NULL /* synchronous */);
-                        PRINT_TIME(ts,"daos_epoch_commit");
+                        add_timer("daos_epoch_commit");
                         DCHECK(rc, "Failed to commit object write");
                 }
 
@@ -750,6 +765,7 @@ static IOR_offset_t DAOS_GetFileSize(IOR_param_t *test, MPI_Comm testComm,
 {
         /*
          * Sizes are inapplicable to containers at the moment.
+         * Just cheat to suppress the annoying warning
          */
-        return 0;
+        return test->expectedAggFileSize;
 }
