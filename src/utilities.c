@@ -47,6 +47,11 @@ extern int rank;
 extern int rankOffset;
 extern int verbose;
 
+#define TIME_MSG_LEN 8192
+char timers[TIME_MSG_LEN];
+double timer;
+
+
 /***************************** F U N C T I O N S ******************************/
 
 /*
@@ -64,6 +69,30 @@ char *CurrentTimeString(void)
         }
         /* ctime string ends in \n */
         return (currentTimePtr);
+}
+
+/* Start a timer for the application to do debugging */
+void StartTimer() {
+    timer = MPI_Wtime();
+}
+
+void AddTimer(char *op) {
+    snprintf(&(timers[strlen(timers)]),
+        TIME_MSG_LEN - strlen(timers), "\tIOD %s_time =  %.4f\n", op,
+        MPI_Wtime() - timer);
+}
+
+void AddTimerAndBandwidth(char *op, IOR_offset_t len) {
+    snprintf(&(timers[strlen(timers)]),
+        TIME_MSG_LEN - strlen(timers), 
+        "\tIOD %s_time = %.4f bandwidth MB/s = %.2f\n", 
+        op, MPI_Wtime() - timer,
+        (len / 1048576) / (MPI_Wtime() - timer));
+
+}
+
+void PrintTimers() {
+    printf("%s\n", timers);
 }
 
 /*

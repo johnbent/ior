@@ -27,5 +27,9 @@ void DumpBuffer(void *, size_t);
 void SeedRandGen(MPI_Comm);
 void SetHints (MPI_Info *, char *);
 void ShowHints (MPI_Info *);
+void AddTimer(char *);
+void AddTimerAndBandwidth(char *, IOR_offset_t);
+void StartTimer();
+void PrintTimers();
 
 #endif  /* !_UTILITIES_H */
