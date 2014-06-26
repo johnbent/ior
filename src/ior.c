@@ -67,6 +67,9 @@ ior_aiori_t *available_aiori[] = {
 #ifdef USE_DAOS_AIORI
         &daos_aiori,
 #endif
+#ifdef USE_PLFS_AIORI
+        &plfs_aiori,
+#endif
         NULL
 };
 
@@ -725,7 +728,7 @@ static void DisplayUsage(char **argv)
 {
         char *opts[] = {
                 "OPTIONS:",
-                " -a S  api --  API for I/O [POSIX|MPIIO|HDF5|NCMPI|IOD|DAOS]",
+                " -a S  api --  API for I/O [POSIX|MPIIO|HDF5|NCMPI|IOD|DAOS|PLFS]",
                 " -A N  refNum -- user supplied reference number to include in the summary",
                 " -b N  blockSize -- contiguous bytes to write per task  (e.g.: 8, 4k, 2m, 1g)",
                 " -B    useO_DIRECT -- uses O_DIRECT for POSIX, bypassing I/O buffers",

@@ -79,13 +79,24 @@ AM_COND_IF([USE_IOD_AIORI],[
         AC_DEFINE([USE_IOD_AIORI], [], [Build IOD backend AIORI])
 ])
 
+# PLFS support
+AC_ARG_WITH([plfs],
+        [AS_HELP_STRING([--with-plfs],
+           [support IO with PLFS backend @<:@default=no@:>@])],
+        [],
+        [with_plfs=no])
+AM_CONDITIONAL([USE_PLFS_AIORI], [test x$with_plfs = xyes])
+AM_COND_IF([USE_PLFS_AIORI],[
+        AC_DEFINE([USE_PLFS_AIORI], [], [Build PLFS backend AIORI])
+])
+
 # DAOS support
 AC_ARG_WITH([daos],
         [AS_HELP_STRING([--with-daos],
            [support IO with DAOS backend @<:@default=no@:>@])],
         [],
         [with_daos=no])
-AM_CONDITIONAL([USE_DAOS_AIORI], [test x$with_iod = xyes])
+AM_CONDITIONAL([USE_DAOS_AIORI], [test x$with_daos = xyes])
 AM_COND_IF([USE_DAOS_AIORI],[
         AC_DEFINE([USE_DAOS_AIORI], [], [Build DAOS backend AIORI])
 ])

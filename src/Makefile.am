@@ -25,6 +25,10 @@ if USE_IOD_AIORI
 ior_SOURCES += aiori-IOD.c
 ior_LDADD += -liod -lplfs -lpthread -lmchecksum
 endif
+if USE_PLFS_AIORI
+ior_SOURCES += aiori-PLFS.c
+ior_LDADD += -lplfs -lpthread -lmchecksum
+endif
 if USE_DAOS_AIORI
 ior_SOURCES += aiori-DAOS.c list.h
 ior_LDADD += -ldaos
