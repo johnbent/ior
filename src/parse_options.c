@@ -300,6 +300,8 @@ void DecodeDirective(char *line, IOR_param_t *params)
                 params->iod_fetch = atoi(value); 
         } else if (strcasecmp(option, "iodchecksum") == 0) {
                 params->iod_checksum = atoi(value); 
+        } else if (strcasecmp(option, "iodcellsize") == 0) {
+                params->iod_cellsize = StringToBytes(value); 
         } else {
                 if (rank == 0)
                         fprintf(stdout, "Unrecognized parameter \"%s\"\n",

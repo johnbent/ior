@@ -148,6 +148,7 @@ typedef struct
     int iod_purge;                     /* evict data from bb after write close */
     int iod_checksum;                  /* protect and verify data with checksums */
     int iod_fetch;                     /* fetch data from bb before read open */
+    size_t iod_cellsize;               /* size of IOD cells in arrays */
 } IOR_param_t;
 
 /* each pointer is to an array, each of length equal to the number of

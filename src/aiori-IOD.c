@@ -302,13 +302,17 @@ teardown_array(iod_state_t *I) {
 }
 
 void
-setup_array_io(size_t len, off_t off, char *buf, iod_state_t *s) { 
-    size_t which_cell = off / len;
+setup_array_io(size_t len, off_t off, char *buf, iod_state_t *s,size_t cell_sz) { 
+    size_t which_cell = off / cell_sz;
+    size_t num_cells = len / cell_sz;
+    if (len % cell_sz != 0) {
+        IOD_DIE_ON_ERROR("transfer_size % iod_cell_size != 0",-1);
+    }
     //IDEBUG(s->myrank,"Off %ld is cell %ld when cellsize is %ld",off,which_cell,len);
     s->slab->start[0]  = which_cell;
     s->slab->count[0]  = 1;
-    s->slab->stride[0] = 1;
-    s->slab->block[0]  = 1;
+    s->slab->stride[0] = num_cells;
+    s->slab->block[0]  = num_cells;
     setup_mem_desc(s, buf, len);
 }
 
@@ -353,7 +357,7 @@ setup_cksum(iod_state_t *s, char *buf, size_t len, int rw, off_t off) {
 
 // returns zero on success and number of bytes transferred in bytes
 int 
-iod_write(iod_state_t *I,char *buf,size_t len,off_t off,ssize_t *bytes) {
+iod_write(iod_state_t *I,char *buf,size_t len,off_t off,size_t cell_size, ssize_t *bytes) {
 	iod_ret_t ret;
 	iod_hint_list_t *hints = NULL;
 	iod_event_t *event = NULL;
@@ -377,7 +381,7 @@ iod_write(iod_state_t *I,char *buf,size_t len,off_t off,ssize_t *bytes) {
             *bytes = len;
             break;
         case IOD_OBJ_ARRAY:
-            setup_array_io(len,off,buf,I);
+            setup_array_io(len,off,buf,I,cell_size);
             ret = iod_array_write(I->oh,I->tid,hints,I->mem_desc,I->slab,I->cksum,event);
             IOD_RETURN_ON_ERROR("iod_array_write",ret); // successful write returns zero
             *bytes = len;
@@ -391,7 +395,7 @@ iod_write(iod_state_t *I,char *buf,size_t len,off_t off,ssize_t *bytes) {
 }
 
 int 
-iod_read(iod_state_t *s, char *buf,size_t len,off_t off,ssize_t *bytes) {
+iod_read(iod_state_t *s, char *buf,size_t len,off_t off,size_t cell_size, ssize_t *bytes) {
     iod_hint_list_t *hints = NULL;
     iod_event_t *event = NULL;
     iod_ret_t ret = 0;
@@ -401,7 +405,7 @@ iod_read(iod_state_t *s, char *buf,size_t len,off_t off,ssize_t *bytes) {
 
     switch(s->otype) {
     case IOD_OBJ_ARRAY:
-        setup_array_io(len,off,buf,s);
+        setup_array_io(len,off,buf,s,cell_size);
         ret = iod_array_read(s->oh,s->tag,hints,s->mem_desc,s->slab,s->cksum,event);
         IOD_RETURN_ON_ERROR("iod_array_read",ret); // successful read returns zero
         *bytes = len;
@@ -597,6 +601,8 @@ static iod_state_t * Init(IOR_param_t *param)
     MPI_Comm_size(istate->mcom, &(istate->nranks));
     istate->checksum = param->iod_checksum;
 
+    if (!param->iod_cellsize) param->iod_cellsize = param->transferSize;
+
     StartTimer();
     IDEBUG(rank,"About to init");
     rc = iod_initialize(istate->mcom, NULL, istate->nranks, istate->nranks);
@@ -638,7 +644,7 @@ static iod_state_t * Init(IOR_param_t *param)
     /* setup the array */
     if (istate->otype == IOD_OBJ_ARRAY) {
         size_t cell_size, total_sz, last_cell;
-        cell_size = param->transferSize; 
+        cell_size = param->iod_cellsize; 
         total_sz = param->expectedAggFileSize; 
         last_cell = (total_sz / cell_size);
         setup_array(istate, cell_size, last_cell);
@@ -742,9 +748,9 @@ static IOR_offset_t IOD_Xfer(int access, void *file, IOR_size_t * buffer,
 
     IDEBUG(verbosity, "Enter %s", __FUNCTION__);
     if (access == WRITE) {  /* WRITE */
-        rc = iod_write(s,(char*)buffer,length,param->offset, &bytes); 
+        rc = iod_write(s,(char*)buffer,length,param->offset, param->iod_cellsize,&bytes); 
     } else {
-        rc = iod_read(s,(char*)buffer,length,param->offset, &bytes); 
+        rc = iod_read(s,(char*)buffer,length,param->offset, param->iod_cellsize,&bytes); 
     }
     IDEBUG(verbosity, "iod_%s %d: %d", (access==WRITE)?"write":"read",
         (int)rc, (int)bytes);

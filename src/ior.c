@@ -215,6 +215,7 @@ void init_IOR_Param_t(IOR_param_t * p)
         p->iod_purge = 0;
         p->iod_fetch = 0;
         p->iod_checksum = 0;
+        p->iod_cellsize = 0;
 }
 
 /*
@@ -1534,6 +1535,7 @@ static void ShowSetup(IOR_param_t *params)
                 printf("\tiod purge          = %s\n", TrueFalse(params->iod_purge));
                 printf("\tiod fetch          = %s\n", TrueFalse(params->iod_fetch));
                 printf("\tiod checksum       = %s\n", TrueFalse(params->iod_checksum)); 
+                printf("\tiod cellsize       = %s\n", HumanReadable(params->iod_cellsize,BASE_TWO));
             }
         }
         if (verbose >= VERBOSE_1) {
@@ -1656,6 +1658,7 @@ static void ShowTest(IOR_param_t * test)
             fprintf(stdout, "\t%s=%d\n", "iodPurge", test->iod_purge);
             fprintf(stdout, "\t%s=%d\n", "iodFetch", test->iod_fetch);
             fprintf(stdout, "\t%s=%d\n", "iodChecksum", test->iod_checksum);
+            fprintf(stdout, "\t%d=%lld\n", "iodCellsize", test->iod_cellsize);
         }
         fprintf(stdout, "\t%s=%d\n", "useSharedFilePointer",
                 test->useSharedFilePointer);
@@ -2035,10 +2038,6 @@ static void TestIoSys(IOR_test_t *test)
         /* bind I/O calls to specific API */
         AioriBind(params->api);
 
-        /* show test setup */
-        if (rank == 0 && verbose >= VERBOSE_0)
-                ShowSetup(params);
-
         hog_buf = HogMemory(params);
 
         startTime = GetTimeStamp();
@@ -2050,6 +2049,10 @@ static void TestIoSys(IOR_test_t *test)
                 ERR("init failed");
             }
         }
+
+        /* show test setup */
+        if (rank == 0 && verbose >= VERBOSE_0)
+                ShowSetup(params);
 
         /* loop over test iterations */
         for (rep = 0; rep < params->repetitions; rep++) {
@@ -2377,6 +2380,8 @@ static void ValidTests(IOR_param_t * test)
         } else {
                 if ((test->blockSize % test->transferSize) != 0)
                         ERR("block size must be a multiple of transfer size");
+                if (test->iod_cellsize && test->transferSize % test->iod_cellsize != 0)
+                        ERR("iod_cellsize must be a multiple of transfer size");
         }
         if (test->blockSize < test->transferSize)
                 ERR("block size must not be smaller than transfer size");
